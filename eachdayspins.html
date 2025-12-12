@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Adaptive Roulette Predictor (Per-Spin Refit) + CSV + Martingale + Risk</title>
+<title>Adaptive Roulette Predictor (Per-Spin Refit) + Wheel Highlight + CSV + Martingale + Risk</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <style>
   *{box-sizing:border-box}
@@ -26,12 +26,111 @@
   .good{background:rgba(0,200,140,.15);color:#4cf3b6}
   .bad{background:rgba(255,120,80,.15);color:#ffb899}
   .neutral{background:rgba(130,150,255,.15);color:#b3bfff}
+
   table{width:100%;border-collapse:collapse;margin-top:.6rem}
   th,td{border-bottom:1px solid rgba(255,255,255,.07);padding:.35rem .35rem;text-align:left;font-size:.85rem}
   th{opacity:.9}
+
   canvas{width:100%;height:220px;background:rgba(255,255,255,.03);border-radius:12px;border:1px solid rgba(255,255,255,.06)}
   .progress{height:10px;background:rgba(255,255,255,.10);border-radius:999px;overflow:hidden;margin-top:.4rem}
   .bar{height:100%;width:0%;background:#ff3366;transition:width .08s linear}
+
+  /* ===== Wheel ===== */
+  .wheel-wrap{
+    margin-top:.9rem;
+    display:flex;
+    gap:1rem;
+    flex-wrap:wrap;
+    align-items:flex-start;
+  }
+  .wheel{
+    position:relative;
+    width: 360px;
+    height: 360px;
+    border-radius: 50%;
+    background: radial-gradient(circle at center, rgba(255,255,255,.06) 0%, rgba(255,255,255,.02) 55%, rgba(0,0,0,.25) 100%);
+    border: 1px solid rgba(255,255,255,.10);
+    box-shadow: 0 16px 45px rgba(0,0,0,.35);
+    overflow:hidden;
+  }
+  @media(max-width:480px){
+    .wheel{ width: 320px; height: 320px; }
+  }
+  .wheel::after{
+    content:"";
+    position:absolute;
+    inset: 18%;
+    border-radius: 50%;
+    background: rgba(11,16,32,.85);
+    border: 1px solid rgba(255,255,255,.10);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.05);
+  }
+  .pocket{
+    position:absolute;
+    left:50%;
+    top:50%;
+    transform-origin: 0 0;
+    pointer-events:none;
+  }
+  .pocket .chip{
+    pointer-events:none;
+    width: 34px;
+    height: 24px;
+    border-radius: 8px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-weight:800;
+    font-size: 12px;
+    letter-spacing: .02em;
+    color:#fff;
+    border: 1px solid rgba(255,255,255,.14);
+    box-shadow: 0 6px 14px rgba(0,0,0,.25);
+    transform: translate(-50%, -50%);
+  }
+  .chip.red{ background:#c5283d; }
+  .chip.black{ background:#111827; }
+  .chip.green{ background:#0b7a3a; }
+
+  /* highlights */
+  .chip.covered{
+    outline: 2px solid rgba(88,213,255,.9);
+    outline-offset: 2px;
+  }
+  .chip.predicted{
+    outline: 3px solid rgba(255,51,102,1);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 3px rgba(255,51,102,.18), 0 12px 24px rgba(0,0,0,.35);
+  }
+
+  .next-box{
+    min-width: 240px;
+    flex:1;
+    background: rgba(255,255,255,.03);
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: 12px;
+    padding: .8rem;
+  }
+  .next-num{
+    font-size: 2.2rem;
+    font-weight: 900;
+    line-height: 1;
+    margin: .25rem 0 .4rem;
+  }
+  .covered-list{
+    display:flex;
+    flex-wrap:wrap;
+    gap:.35rem;
+    margin-top:.4rem;
+  }
+  .covered-list span{
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    padding: .18rem .45rem;
+    border-radius: 999px;
+    background: rgba(255,255,255,.06);
+    border: 1px solid rgba(255,255,255,.08);
+  }
 </style>
 </head>
 <body>
@@ -44,7 +143,7 @@ Objective: <b>reject</b> any candidate that creates worst streak &gt; cap inside
 
 <div class="grid">
 
-  <!-- LEFT: Live + Chart -->
+  <!-- LEFT: Live + Wheel + Chart -->
   <div class="card">
     <h2>Live Mode</h2>
 
@@ -96,12 +195,23 @@ Objective: <b>reject</b> any candidate that creates worst streak &gt; cap inside
       <div style="flex:0;min-width:360px">
         <button class="btn-primary" id="addSpinBtn" type="button" onclick="addSpin()">Add Spin</button>
         <button class="btn-secondary" type="button" onclick="resetLive()">Reset</button>
-        <!-- NEW: export -->
         <button class="btn-secondary" type="button" onclick="exportLiveNumbers()">Export .txt</button>
       </div>
     </div>
 
     <div id="liveStatus" class="small" style="margin-top:.6rem"></div>
+
+    <!-- NEW: Wheel + Next number box -->
+    <div class="wheel-wrap">
+      <div class="wheel" id="wheel"></div>
+      <div class="next-box">
+        <div class="small"><span class="pill neutral">NEXT</span> Predicted centre</div>
+        <div class="next-num" id="nextCentre">–</div>
+        <div class="small" id="nextMeta">No prediction yet.</div>
+        <div class="small" style="margin-top:.6rem"><span class="pill neutral">COVERED</span> Neighbours</div>
+        <div class="covered-list" id="coveredList"></div>
+      </div>
+    </div>
 
     <div style="margin-top:.8rem">
       <h2>Param Drift (per spin)</h2>
@@ -189,6 +299,13 @@ Objective: <b>reject</b> any candidate that creates worst streak &gt; cap inside
 const WHEEL = [0,32,15,19,4,21,2,25,17,34,6,27,13,36,11,30,8,23,10,5,24,16,33,1,20,14,31,9,22,18,29,7,28,12,35,3,26];
 const IDX = {}; WHEEL.forEach((n,i)=>IDX[n]=i);
 
+/* European roulette colours */
+const RED_SET = new Set([1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]);
+function colourOf(n){
+  if(n===0) return "green";
+  return RED_SET.has(n) ? "red" : "black";
+}
+
 /* =========================
    UI REFS
 ========================= */
@@ -205,6 +322,11 @@ const spinLogBody = document.getElementById("spinLogBody");
 const chart = document.getElementById("chart");
 const chartNote = document.getElementById("chartNote");
 const ctx = chart.getContext("2d");
+
+const wheelEl = document.getElementById("wheel");
+const nextCentreEl = document.getElementById("nextCentre");
+const nextMetaEl = document.getElementById("nextMeta");
+const coveredListEl = document.getElementById("coveredList");
 
 const csvInput = document.getElementById("csvInput");
 const runCsvBtn = document.getElementById("runCsvBtn");
@@ -223,16 +345,15 @@ const tWorst = document.getElementById("tWorst");
 const tPnL = document.getElementById("tPnL");
 const tDD = document.getElementById("tDD");
 const tStep = document.getElementById("tStep");
-
 const riskBox = document.getElementById("riskBox");
 
 /* =========================
-   NEW: Enter-to-add + keep focus
+   ENTER to add + focus
 ========================= */
 function focusSpin(){ spinInput.focus(); }
 spinInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") {
-    e.preventDefault();     // prevents form-style submit / beep on some browsers
+    e.preventDefault();
     addSpin();
     focusSpin();
   }
@@ -240,7 +361,7 @@ spinInput.addEventListener("keydown", (e) => {
 window.addEventListener("load", () => focusSpin());
 
 /* =========================
-   NEW: export live numbers to .txt
+   EXPORT LIVE NUMBERS
 ========================= */
 function exportLiveNumbers(){
   if(!spins.length){
@@ -261,6 +382,106 @@ function exportLiveNumbers(){
     URL.revokeObjectURL(url);
   },0);
 }
+
+/* =========================
+   WHEEL UI BUILD + HIGHLIGHT
+========================= */
+const pocketNodes = new Map(); // num -> chip element
+
+function buildWheel(){
+  wheelEl.innerHTML = "";
+  pocketNodes.clear();
+
+  const rect = wheelEl.getBoundingClientRect();
+  const size = Math.min(rect.width, rect.height);
+  const R = (size * 0.46); // radius to place pockets
+  const cx = size/2;
+  const cy = size/2;
+
+  // place pockets in wheel order around the circle
+  const total = WHEEL.length;
+  for(let i=0;i<total;i++){
+    const n = WHEEL[i];
+
+    // angle: start at top (-90deg), go clockwise
+    const ang = (-Math.PI/2) + (i/total) * (Math.PI*2);
+
+    const x = cx + Math.cos(ang) * R;
+    const y = cy + Math.sin(ang) * R;
+
+    const pocket = document.createElement("div");
+    pocket.className = "pocket";
+    pocket.style.left = x + "px";
+    pocket.style.top  = y + "px";
+
+    const chip = document.createElement("div");
+    const col = colourOf(n);
+    chip.className = `chip ${col}`;
+    chip.textContent = String(n);
+
+    pocket.appendChild(chip);
+    wheelEl.appendChild(pocket);
+
+    pocketNodes.set(n, chip);
+  }
+}
+
+function clearWheelHighlights(){
+  for(const chip of pocketNodes.values()){
+    chip.classList.remove("covered", "predicted");
+  }
+}
+
+function highlightWheel(centre, covered){
+  clearWheelHighlights();
+  if(typeof centre !== "number") return;
+
+  // covered first
+  if(Array.isArray(covered)){
+    for(const n of covered){
+      const chip = pocketNodes.get(n);
+      if(chip) chip.classList.add("covered");
+    }
+  }
+
+  // centre on top
+  const cchip = pocketNodes.get(centre);
+  if(cchip) cchip.classList.add("predicted");
+}
+
+function renderNextBox(centre, covered, chosen){
+  if(typeof centre !== "number"){
+    nextCentreEl.textContent = "–";
+    nextMetaEl.textContent = "No prediction yet.";
+    coveredListEl.innerHTML = "";
+    return;
+  }
+  nextCentreEl.textContent = String(centre);
+
+  nextMetaEl.innerHTML =
+    `shift=${chosen.params.shift}, a=${chosen.params.a.toFixed(2)}, b=${chosen.params.b.toFixed(2)} • `+
+    `windowWorst=${chosen.worst} • windowHit=${(chosen.hitRate*100).toFixed(1)}% • windowBets=${chosen.bets}`;
+
+  coveredListEl.innerHTML = "";
+  for(const n of covered){
+    const s = document.createElement("span");
+    s.textContent = String(n);
+    coveredListEl.appendChild(s);
+  }
+}
+
+/* Build wheel once layout exists */
+window.addEventListener("load", () => {
+  buildWheel();
+  renderNextBox(null, [], null);
+});
+window.addEventListener("resize", () => {
+  buildWheel();
+  // reapply latest highlight
+  if(lastPredInfo && typeof lastPredInfo.pred === "number"){
+    highlightWheel(lastPredInfo.pred, lastPredInfo.covered);
+  }
+});
 
 /* =========================
    HELPERS
@@ -284,7 +505,7 @@ function buildDistances(arr){
     if(a==null||b==null) continue;
     const dir = directionForIndex(i);
     const dist = dir==="CW" ? (b-a+37)%37 : (a-b+37)%37;
-    out.push({dir, dist, spinIndex:i}); // spinIndex is the index of spin producing this distance
+    out.push({dir, dist, spinIndex:i});
   }
   return out;
 }
@@ -390,7 +611,6 @@ function recalcParamsForNextSpin(history){
   if(!ab) return null;
 
   const evalRecords = fitWindow.slice(3);
-
   const half = +halfSectorEl.value;
 
   let best = null;
@@ -425,10 +645,7 @@ function recalcParamsForNextSpin(history){
 
     const hitRate = hits / bets;
 
-    if(!best ||
-      worst < best.worst ||
-      (worst === best.worst && hitRate > best.hitRate)
-    ){
+    if(!best || worst < best.worst || (worst === best.worst && hitRate > best.hitRate)){
       best = {params, worst, hitRate, bets};
     }
   }
@@ -458,6 +675,7 @@ function addSpin(){
 
   spins.push(v);
 
+  // recalc params for NEXT spin
   const chosen = recalcParamsForNextSpin(spins);
   if(!chosen){
     const dists = buildDistances(spins);
@@ -467,7 +685,10 @@ function addSpin(){
     liveStatus.innerHTML =
       `<span class="pill neutral">WAIT</span> Not enough ${upcomingDir} directional distances yet. `+
       `Have ${usable}, need ${need}. No betting until enough data.`;
+
     lastPredInfo = null;
+    renderNextBox(null, [], null);
+    clearWheelHighlights();
     focusSpin();
     return;
   }
@@ -476,6 +697,8 @@ function addSpin(){
   if(centre==null){
     liveStatus.innerHTML = `<span class="pill neutral">WAIT</span> Model not ready yet (needs more structure).`;
     lastPredInfo = null;
+    renderNextBox(null, [], null);
+    clearWheelHighlights();
     focusSpin();
     return;
   }
@@ -501,6 +724,10 @@ function addSpin(){
     `<span class="mono">Recalc params</span>: shift=${chosen.params.shift}, a=${chosen.params.a.toFixed(2)}, b=${chosen.params.b.toFixed(2)} `+
     `• windowWorst=${chosen.worst} • windowHit=${(chosen.hitRate*100).toFixed(1)}% • windowBets=${chosen.bets}`;
 
+  // NEW: update wheel + next box
+  renderNextBox(centre, covered, chosen);
+  highlightWheel(centre, covered);
+
   focusSpin();
 }
 
@@ -512,6 +739,8 @@ function resetLive(){
   liveStatus.innerHTML = "";
   clearChart();
   chartNote.textContent = "";
+  renderNextBox(null, [], null);
+  clearWheelHighlights();
   focusSpin();
 }
 
@@ -687,16 +916,10 @@ function simulateDay(spinsDay){
     history.push(result);
 
     const chosen = recalcParamsForNextSpin(history);
-    if(!chosen){
-      lastBet = null;
-      continue;
-    }
+    if(!chosen){ lastBet = null; continue; }
 
     const centre = csCentre(history, chosen.params);
-    if(centre==null){
-      lastBet = null;
-      continue;
-    }
+    if(centre==null){ lastBet = null; continue; }
 
     predCount++;
     sumShift += chosen.params.shift;
