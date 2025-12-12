@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Adaptive Roulette Predictor (Per-Spin) + CSV + Martingale + Risk</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;padding:1rem;background:#0b1020;color:#f5f5f5;font-family:system-ui}
+  h1,h2{margin:.2rem 0 .6rem 0}
+  .grid{display:grid;grid-template-columns:1.2fr 1fr;gap:1rem}
+  @media(max-width:900px){.grid{grid-template-columns:1fr}}
+  .card{background:#151a2c;border:1px solid rgba(255,255,255,.06);border-radius:14px;padding:1rem;box-shadow:0 14px 40px rgba(0,0,0,.35)}
+  label{display:block;font-size:.9rem;opacity:.9;margin:.45rem 0 .25rem}
+  input,textarea,select{width:100%;padding:.55rem .65rem;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:#0b1020;color:#fff;outline:none}
+  textarea{min-height:100px;resize:vertical}
+  .row{display:flex;gap:.6rem;flex-wrap:wrap}
+  .row > *{flex:1;min-width:180px}
+  button{border:0;border-radius:999px;padding:.55rem .9rem;font-weight:650;cursor:pointer}
+  .btn-primary{background:#ff3366;color:#fff}
+  .btn-secondary{background:#232b49;color:#fff}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .small{font-size:.85rem;opacity:.8;line-height:1.35}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .pill{display:inline-flex;align-items:center;padding:.2rem .55rem;border-radius:999px;font-size:.75rem;font-weight:700;margin-right:.35rem}
+  .good{background:rgba(0,200,140,.15);color:#4cf3b6}
+  .bad{background:rgba(255,120,80,.15);color:#ffb899}
+  .neutral{background:rgba(130,150,255,.15);color:#b3bfff}
+  table{width:100%;border-collapse:collapse;margin-top:.6rem}
+  th,td{border-bottom:1px solid rgba(255,255,255,.07);padding:.35rem .35rem;text-align:left;font-size:.85rem}
+  th{opacity:.9}
+  canvas{width:100%;height:220px;background:rgba(255,255,255,.03);border-radius:12px;border:1px solid rgba(255,255,255,.06)}
+  .progress{height:10px;background:rgba(255,255,255,.10);border-radius:999px;overflow:hidden;margin-top:.4rem}
+  .bar{height:100%;width:0%;background:#ff3366;transition:width .08s linear}
+</style>
+</head>
+<body>
+
+<h1>Adaptive Roulette Predictor</h1>
+<p class="small">
+Per-spin optimisation using last <b>N</b> distances in the upcoming direction.<br>
+Optimiser objective: <b>never exceed streak cap</b> (default 10) → then <b>minimise worst losing streak</b> → then <b>maximise hit rate</b>.
+</p>
+
+<div class="grid">
+
+  <!-- LEFT: Live + Charts -->
+  <div class="card">
+    <h2>Live Mode</h2>
+
+    <div class="row">
+      <div>
+        <label>Base stake / number</label>
+        <input id="baseUnit" type="number" value="1" step="0.01" min="0.01">
+      </div>
+      <div>
+        <label>Neighbour half-sector</label>
+        <input id="halfSector" type="number" value="8" min="1" max="18">
+        <div class="small">8 = 17 numbers covered</div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label>Adaptive window N (per direction)</label>
+        <input id="windowN" type="number" value="5" min="5" max="25">
+      </div>
+      <div>
+        <label>Streak cap (hard limit)</label>
+        <input id="streakCap" type="number" value="10" min="1" max="50">
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label>Martingale reset after X consecutive losses</label>
+        <input id="martReset" type="number" value="11" min="1" max="50">
+      </div>
+      <div>
+        <label>Parameter grid (coarse/fine)</label>
+        <select id="gridMode">
+          <option value="coarse">Coarse (fast)</option>
+          <option value="fine">Fine (slower)</option>
+        </select>
+      </div>
+    </div>
+
+    <label class="small">
+      <input type="checkbox" id="adaptiveToggle" checked>
+      Enable per-spin adaptive optimisation (recommended)
+    </label>
+
+    <div class="row" style="align-items:end">
+      <div>
+        <label>Add spin (0–36)</label>
+        <input id="spinInput" type="number" min="0" max="36" placeholder="e.g. 23">
+      </div>
+      <div style="flex:0;min-width:220px">
+        <button class="btn-primary" onclick="addSpin()">Add Spin</button>
+        <button class="btn-secondary" onclick="resetLive()">Reset</button>
+      </div>
+    </div>
+
+    <div id="liveStatus" class="small" style="margin-top:.6rem"></div>
+
+    <div style="margin-top:.8rem">
+      <h2>Param Drift (per spin)</h2>
+      <canvas id="chart"></canvas>
+      <div class="small" id="chartNote"></div>
+    </div>
+
+    <div style="margin-top:.8rem">
+      <h2>Per-Spin Log</h2>
+      <div class="small">Shows the params chosen for each prediction + whether it hit.</div>
+      <table class="mono">
+        <thead>
+          <tr>
+            <th>#</th><th>Dir</th><th>Pred</th><th>Result</th><th>Hit</th><th>shift</th><th>a</th><th>b</th><th>WindowWorst</th><th>WindowHit%</th>
+          </tr>
+        </thead>
+        <tbody id="spinLogBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- RIGHT: CSV + Simulation -->
+  <div class="card">
+    <h2>CSV Day Replay (columns = days)</h2>
+    <p class="small">
+      Upload a CSV where the first row is headers (Day 1, Day 2, …) and each column contains that day’s spins.
+      This simulation uses the <b>same adaptive per-spin optimiser</b> as Live mode.
+    </p>
+
+    <input type="file" id="csvInput" accept=".csv" />
+
+    <div class="row" style="align-items:end">
+      <div>
+        <label>Simulation mode</label>
+        <select id="simMode">
+          <option value="adaptive">Adaptive (per spin)</option>
+          <option value="fixed">Fixed params (manual)</option>
+        </select>
+      </div>
+      <div>
+        <label>Fixed params (only if Fixed mode)</label>
+        <div class="row">
+          <input id="fixedShift" type="number" value="3" min="0" max="20" placeholder="shift">
+          <input id="fixedA" type="number" value="0.33" step="0.01" min="0" max="1" placeholder="a">
+          <input id="fixedB" type="number" value="0.67" step="0.01" min="0" max="1" placeholder="b">
+        </div>
+      </div>
+    </div>
+
+    <div class="row" style="align-items:end">
+      <button class="btn-primary" id="runCsvBtn" onclick="runCsv()">Run CSV Replay</button>
+      <button class="btn-secondary" onclick="clearCsv()">Clear Results</button>
+    </div>
+
+    <div id="csvProgWrap" style="margin-top:.6rem;display:none">
+      <div class="small" id="csvProgText">Working…</div>
+      <div class="progress"><div class="bar" id="csvProgBar"></div></div>
+    </div>
+
+    <div id="csvResults" style="display:none;margin-top:.8rem">
+      <h2>Day Results</h2>
+      <table class="mono">
+        <thead>
+          <tr>
+            <th>Day</th><th>Spins</th><th>Bets</th><th>Hit%</th><th>WorstStreak</th><th>P&L</th><th>MaxDD</th><th>WorstStakeStep</th><th>Notes</th>
+          </tr>
+        </thead>
+        <tbody id="dayBody"></tbody>
+        <tfoot>
+          <tr>
+            <td><b>TOTAL</b></td>
+            <td id="tSpins"></td>
+            <td id="tBets"></td>
+            <td id="tHit"></td>
+            <td id="tWorst"></td>
+            <td id="tPnL"></td>
+            <td id="tDD"></td>
+            <td id="tStep"></td>
+            <td></td>
+          </tr>
+        </tfoot>
+      </table>
+
+      <h2 style="margin-top:1rem">Risk Overlay</h2>
+      <div class="small" id="riskBox"></div>
+
+      <h2 style="margin-top:1rem">Per-day parameter summary</h2>
+      <div class="small">For Adaptive mode: shows average chosen params across that day’s spins (and most common shift).</div>
+      <table class="mono">
+        <thead>
+          <tr><th>Day</th><th>Avg shift</th><th>Mode shift</th><th>Avg a</th><th>Avg b</th><th>Spins with params</th><th>Cap breaches</th></tr>
+        </thead>
+        <tbody id="dayParamBody"></tbody>
+      </table>
+    </div>
+
+  </div>
+</div>
+
+<script>
+/* =========================
+   WHEEL + INDEX
+========================= */
+const WHEEL = [0,32,15,19,4,21,2,25,17,34,6,27,13,36,11,30,8,23,10,5,24,16,33,1,20,14,31,9,22,18,29,7,28,12,35,3,26];
+const IDX = {}; WHEEL.forEach((n,i)=>IDX[n]=i);
+
+/* =========================
+   UI REFS
+========================= */
+const baseUnit = document.getElementById("baseUnit");
+const halfSectorEl = document.getElementById("halfSector");
+const windowN = document.getElementById("windowN");
+const streakCapEl = document.getElementById("streakCap");
+const martResetEl = document.getElementById("martReset");
+const gridModeEl = document.getElementById("gridMode");
+const adaptiveToggle = document.getElementById("adaptiveToggle");
+const spinInput = document.getElementById("spinInput");
+const liveStatus = document.getElementById("liveStatus");
+const spinLogBody = document.getElementById("spinLogBody");
+
+const chart = document.getElementById("chart");
+const chartNote = document.getElementById("chartNote");
+const ctx = chart.getContext("2d");
+
+const csvInput = document.getElementById("csvInput");
+const runCsvBtn = document.getElementById("runCsvBtn");
+const csvResults = document.getElementById("csvResults");
+const dayBody = document.getElementById("dayBody");
+const dayParamBody = document.getElementById("dayParamBody");
+
+const csvProgWrap = document.getElementById("csvProgWrap");
+const csvProgText = document.getElementById("csvProgText");
+const csvProgBar = document.getElementById("csvProgBar");
+
+const simMode = document.getElementById("simMode");
+const fixedShift = document.getElementById("fixedShift");
+const fixedA = document.getElementById("fixedA");
+const fixedB = document.getElementById("fixedB");
+
+const tSpins = document.getElementById("tSpins");
+const tBets = document.getElementById("tBets");
+const tHit = document.getElementById("tHit");
+const tWorst = document.getElementById("tWorst");
+const tPnL = document.getElementById("tPnL");
+const tDD = document.getElementById("tDD");
+const tStep = document.getElementById("tStep");
+
+const riskBox = document.getElementById("riskBox");
+
+/* =========================
+   LIVE STATE
+========================= */
+let spins = [];
+let logRows = []; // {i, dir, pred, result, hit, params, windowWorst, windowHit}
+let chartSeries = []; // {shift,a,b}
+let lastPredInfo = null; // last bet info for scoring when next spin arrives
+
+function directionForIndex(i){ return i%2===0 ? "CW" : "CCW"; }
+
+function parseSpinText(text){
+  return text.split(/[\s,;]+/).filter(Boolean).map(x=>parseInt(x,10)).filter(v=>Number.isFinite(v)&&v>=0&&v<=36);
+}
+
+function neighboursForCentre(centreNum, half){
+  const idx = IDX[centreNum];
+  if(idx==null) return [];
+  const nums=[];
+  for(let off=-half; off<=half; off++){
+    nums.push(WHEEL[(idx+off+37)%37]);
+  }
+  return nums;
+}
+
+function buildDistances(arr){
+  const out=[];
+  for(let i=1;i<arr.length;i++){
+    const a=IDX[arr[i-1]], b=IDX[arr[i]];
+    if(a==null||b==null) continue;
+    const dir = directionForIndex(i);
+    const dist = dir==="CW" ? (b-a+37)%37 : (a-b+37)%37;
+    out.push({dir, dist, spinIndex:i}); // spinIndex is the index of the spin that produced this distance
+  }
+  return out;
+}
+
+/* =========================
+   FIXED CS PREDICTION
+   (centre number only; neighbours computed outside)
+========================= */
+function csCentreFixed(history, params){
+  if(history.length < 4) return null;
+
+  const dists = buildDistances(history);
+  const upcomingDir = directionForIndex(history.length);
+  const ds = dists.filter(x=>x.dir===upcomingDir).map(x=>x.dist);
+  if(ds.length < 3) return null;
+
+  const S1 = ds[ds.length-3], S2 = ds[ds.length-2], S3 = ds[ds.length-1];
+  const beta = S3 - S2;
+  const gamma = (S3 - S2) - (S2 - S1);
+
+  let step = Math.round(S3 + params.a*beta + params.b*gamma);
+  step = (step + params.shift) % 37;
+
+  const lastIdx = IDX[history[history.length-1]];
+  const centreIdx = upcomingDir==="CW"
+    ? (lastIdx + step) % 37
+    : (lastIdx - step + 74) % 37;
+
+  return WHEEL[centreIdx];
+}
+
+/* =========================
+   PARAM GRID (coarse/fine)
+========================= */
+function getParamGrid(){
+  const mode = gridModeEl.value;
+  const shifts = [0,1,2,3,4,5];
+
+  const step = (mode==="fine") ? 0.05 : 0.10;
+  const vals = [];
+  for(let x=0.10; x<=1.0001; x+=step) vals.push(+x.toFixed(2));
+
+  const grid=[];
+  for(const shift of shifts){
+    for(const a of vals){
+      for(const b of vals){
+        grid.push({shift,a,b});
+      }
+    }
+  }
+  return grid;
+}
+
+/* =========================
+   PER-SPIN OPTIMISER
+   - uses last N distances in UPCOMING direction
+   - evaluates each candidate on a rolling slice INSIDE that window
+   - hard cap: reject/penalise if worst streak > cap
+   - tie-break: smaller worst streak, then higher hit rate
+========================= */
+function optimiseParamsPerSpin(spinsArr){
+  const N = +windowN.value;
+  const cap = +streakCapEl.value;
+
+  const dists = buildDistances(spinsArr);
+  const upcomingDir = directionForIndex(spinsArr.length);
+  const usable = dists.filter(x=>x.dir===upcomingDir);
+
+  // Need enough distances to have a window and to score inside it
+  if(usable.length < N + 3) return null;
+
+  const window = usable.slice(-N); // last N distances for that dir
+  const grid = getParamGrid();
+
+  let best = null;
+
+  // Score candidates by replaying predictions across window distances
+  // For each window element at position k, it corresponds to spinIndex s (meaning outcome is spinsArr[s])
+  // We can predict spin s+1 based on history up to s.
+  for(const p of grid){
+    let worst = 0;
+    let streak = 0;
+    let hits = 0;
+    let bets = 0;
+
+    // Start from k=3 to ensure csCentreFixed has enough direction samples
+    for(let k=3; k<window.length; k++){
+      const s = window[k].spinIndex; // this is the spin index in spinsArr
+      if(s+1 >= spinsArr.length) break;
+      const hist = spinsArr.slice(0, s+1); // up to spin s
+      const centre = csCentreFixed(hist, p);
+      if(centre==null) continue;
+
+      const half = +halfSectorEl.value;
+      const covered = neighboursForCentre(centre, half);
+
+      bets++;
+      const result = spinsArr[s+1];
+      const hit = covered.includes(result);
+
+      if(hit){ hits++; streak=0; }
+      else { streak++; worst = Math.max(worst, streak); }
+
+      if(worst > cap) break; // early reject
+    }
+
+    if(bets === 0) continue;
+
+    const hitRate = hits / bets;
+
+    // If worst exceeded cap, treat as invalid
+    const invalid = (worst > cap);
+
+    if(invalid) continue;
+
+    if(!best ||
+      worst < best.worst ||
+      (worst === best.worst && hitRate > best.hitRate)
+    ){
+      best = { params:p, worst, hitRate, bets };
+    }
+  }
+
+  return best;
+}
+
+/* =========================
+   LIVE: add spin (scores previous bet + makes next recommendation)
+========================= */
+function addSpin(){
+  const v = parseInt(spinInput.value,10);
+  if(!Number.isFinite(v) || v<0 || v>36) return;
+  spinInput.value="";
+
+  // 1) Settle last prediction if we had one
+  if(lastPredInfo){
+    lastPredInfo.result = v;
+    lastPredInfo.hit = lastPredInfo.covered.includes(v);
+    appendSpinLog(lastPredInfo);
+    updateChart();
+  }
+
+  // 2) Add to history
+  spins.push(v);
+
+  // 3) Compute next prediction
+  const shouldAdapt = adaptiveToggle.checked;
+  const half = +halfSectorEl.value;
+
+  let chosen = null;
+  if(shouldAdapt){
+    chosen = optimiseParamsPerSpin(spins);
+  }else{
+    chosen = {
+      params:{shift:+fixedShift.value||0, a:+fixedA.value||0, b:+fixedB.value||0},
+      worst: null,
+      hitRate: null,
+      bets: null
+    };
+  }
+
+  if(!chosen){
+    liveStatus.innerHTML = `<span class="pill neutral">WAIT</span> Not enough directional history yet (need more spins in both directions).`;
+    lastPredInfo = null;
+    return;
+  }
+
+  const centre = csCentreFixed(spins, chosen.params);
+  if(centre==null){
+    liveStatus.innerHTML = `<span class="pill neutral">WAIT</span> Not enough model inputs yet for a prediction.`;
+    lastPredInfo = null;
+    return;
+  }
+
+  const covered = neighboursForCentre(centre, half);
+
+  // Store next bet info (to be settled when next result arrives)
+  lastPredInfo = {
+    i: spins.length, // prediction number
+    dir: directionForIndex(spins.length),
+    pred: centre,
+    covered,
+    params: chosen.params,
+    windowWorst: chosen.worst,
+    windowHit: chosen.hitRate
+  };
+
+  // chart series only when we actually chose params
+  chartSeries.push({shift:chosen.params.shift, a:chosen.params.a, b:chosen.params.b});
+
+  liveStatus.innerHTML =
+    `<span class="pill good">BET</span> Next centre: <b>${centre}</b> — cover <b>${covered.length}</b> numbers<br>`+
+    `<span class="mono">Params</span>: shift=${chosen.params.shift}, a=${chosen.params.a.toFixed(2)}, b=${chosen.params.b.toFixed(2)} `+
+    (chosen.windowWorst!=null ? `• windowWorst=${chosen.windowWorst} • windowHit=${(chosen.windowHit*100).toFixed(1)}%` : ``);
+}
+
+/* =========================
+   LIVE: reset
+========================= */
+function resetLive(){
+  spins = [];
+  logRows = [];
+  chartSeries = [];
+  lastPredInfo = null;
+  spinLogBody.innerHTML = "";
+  liveStatus.innerHTML = "";
+  clearChart();
+  chartNote.textContent = "";
+}
+
+/* =========================
+   LIVE: log table
+========================= */
+function appendSpinLog(info){
+  // settle row
+  const hitStr = info.hit ? "YES" : "NO";
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td>${info.i}</td>
+    <td>${info.dir}</td>
+    <td>${info.pred}</td>
+    <td>${info.result}</td>
+    <td>${hitStr}</td>
+    <td>${info.params.shift}</td>
+    <td>${info.params.a.toFixed(2)}</td>
+    <td>${info.params.b.toFixed(2)}</td>
+    <td>${info.windowWorst ?? "–"}</td>
+    <td>${info.windowHit!=null ? (info.windowHit*100).toFixed(1)+"%" : "–"}</td>
+  `;
+  spinLogBody.prepend(tr);
+}
+
+/* =========================
+   CHART: shift/a/b over time (simple 3-line canvas)
+========================= */
+function clearChart(){
+  ctx.clearRect(0,0,chart.width,chart.height);
+}
+function resizeCanvas(){
+  // match CSS size for crisp drawing
+  const rect = chart.getBoundingClientRect();
+  chart.width = Math.floor(rect.width * devicePixelRatio);
+  chart.height = Math.floor(rect.height * devicePixelRatio);
+}
+window.addEventListener("resize", ()=>{ resizeCanvas(); updateChart(); });
+resizeCanvas();
+
+function drawSeries(series, key, minV, maxV){
+  const w=chart.width, h=chart.height;
+  const pad=20*devicePixelRatio;
+  const n=series.length;
+  if(n<2) return;
+  ctx.beginPath();
+  for(let i=0;i<n;i++){
+    const x = pad + (i/(n-1))*(w-2*pad);
+    const v = series[i][key];
+    const y = pad + (1-(v-minV)/(maxV-minV))*(h-2*pad);
+    if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  }
+  ctx.stroke();
+}
+
+function updateChart(){
+  resizeCanvas();
+  clearChart();
+  const n = chartSeries.length;
+  if(n<2){
+    chartNote.textContent = n===0 ? "No params yet." : "Need at least 2 param points to draw.";
+    return;
+  }
+  chartNote.textContent = `Showing ${n} parameter selections (latest on the right).`;
+
+  // axes bg
+  ctx.globalAlpha = 1;
+  ctx.lineWidth = 2*devicePixelRatio;
+
+  // Different strokes without explicit colors? (browser default) -> still distinct enough via lineWidth/dashes
+  ctx.setLineDash([]);
+  drawSeries(chartSeries, "shift", 0, 5);
+
+  ctx.setLineDash([6*devicePixelRatio,4*devicePixelRatio]);
+  drawSeries(chartSeries, "a", 0, 1);
+
+  ctx.setLineDash([2*devicePixelRatio,6*devicePixelRatio]);
+  drawSeries(chartSeries, "b", 0, 1);
+
+  ctx.setLineDash([]);
+}
+
+/* =========================
+   CSV PARSE
+========================= */
+function parseCsv(text){
+  const lines = text.split(/\r?\n/).filter(l=>l.trim()!=="");
+  return lines.map(l=>l.split(/,|\t/));
+}
+function loadCsvFile(){
+  return new Promise((resolve,reject)=>{
+    const file = csvInput.files && csvInput.files[0];
+    if(!file) return reject(new Error("No CSV selected"));
+    const r = new FileReader();
+    r.onload = e=>{
+      const rows = parseCsv(e.target.result);
+      if(rows.length<2) return reject(new Error("CSV must have header + data rows"));
+      const headers = rows[0].map(h=>h.trim()||"Day");
+      const cols = Array.from({length:headers.length}, ()=>[]);
+      for(let i=1;i<rows.length;i++){
+        for(let c=0;c<headers.length;c++){
+          const cell=(rows[i][c]||"").trim();
+          if(!cell) continue;
+          const v = parseInt(cell,10);
+          if(Number.isFinite(v)&&v>=0&&v<=36) cols[c].push(v);
+        }
+      }
+      resolve({headers, cols});
+    };
+    r.readAsText(file);
+  });
+}
+
+/* =========================
+   MARTINGALE + P&L SIM
+   - bets on neighbours around centre
+   - 36x return on hit number stake
+========================= */
+function simulateDay(spinsDay, mode){
+  const half = +halfSectorEl.value;
+  const base = +baseUnit.value;
+  const resetAfter = +martResetEl.value;
+
+  let stakePerNumber = base;
+  let lossCount = 0;
+
+  let bets=0,hits=0;
+  let streak=0,worst=0;
+
+  let pnl=0;
+  let peak=0;
+  let maxDD=0;
+
+  let worstStakeStep = 0; // number of doubles used at worst point
+  let currentStep = 0;
+
+  // param stats
+  let paramCount=0;
+  let sumShift=0,sumA=0,sumB=0;
+  const shiftFreq = new Map();
+  let capBreaches = 0;
+
+  let history=[];
+
+  // Note: prediction i is made AFTER pushing spin i, then settled by spin i+1.
+  let lastBet = null;
+
+  for(let i=0;i<spinsDay.length;i++){
+    const result = spinsDay[i];
+
+    // settle previous bet
+    if(lastBet){
+      bets++;
+      const covered = lastBet.covered;
+      const totalStake = stakePerNumber * covered.length;
+      const hit = covered.includes(result);
+
+      if(hit){
+        hits++;
+        streak=0;
+        // return = 36x stake on winning number
+        pnl += (stakePerNumber*36) - totalStake;
+
+        // reset martingale
+        stakePerNumber = base;
+        lossCount=0;
+        currentStep=0;
+      }else{
+        pnl -= totalStake;
+        streak++;
+        worst = Math.max(worst, streak);
+
+        // martingale
+        lossCount++;
+        if(lossCount >= resetAfter){
+          stakePerNumber = base;
+          lossCount=0;
+          currentStep=0;
+        }else{
+          stakePerNumber *= 2;
+          currentStep++;
+          worstStakeStep = Math.max(worstStakeStep, currentStep);
+        }
+      }
+
+      // drawdown tracking
+      peak = Math.max(peak, pnl);
+      maxDD = Math.max(maxDD, peak - pnl);
+    }
+
+    history.push(result);
+
+    // create next prediction
+    let chosen = null;
+
+    if(mode==="adaptive"){
+      const res = optimiseParamsPerSpin(history);
+      if(res){
+        chosen = res;
+        // update per-day param stats
+        paramCount++;
+        sumShift += res.params.shift;
+        sumA += res.params.a;
+        sumB += res.params.b;
+        shiftFreq.set(res.params.shift, (shiftFreq.get(res.params.shift)||0)+1);
+        // cap breaches are avoided by optimiser; still count if null (lack of data) as 0
+      }else{
+        chosen = null;
+      }
+    }else{
+      chosen = {
+        params:{shift:+fixedShift.value||0, a:+fixedA.value||0, b:+fixedB.value||0},
+        worst:null, hitRate:null
+      };
+      paramCount++;
+      sumShift += chosen.params.shift;
+      sumA += chosen.params.a;
+      sumB += chosen.params.b;
+      shiftFreq.set(chosen.params.shift, (shiftFreq.get(chosen.params.shift)||0)+1);
+    }
+
+    if(!chosen){
+      lastBet = null;
+      continue;
+    }
+
+    const centre = csCentreFixed(history, chosen.params);
+    if(centre==null){
+      lastBet = null;
+      continue;
+    }
+
+    // if optimiser ever produced params that lead to >cap inside scoring window it would have been rejected,
+    // but the *actual day* can still exceed cap due to regime change; count as breach when it happens:
+    if(streak > +streakCapEl.value) capBreaches++;
+
+    lastBet = {
+      centre,
+      covered: neighboursForCentre(centre, half),
+      params: chosen.params
+    };
+  }
+
+  const hitRate = bets ? (hits/bets)*100 : 0;
+
+  // mode shift
+  let modeShift = null;
+  let bestF = -1;
+  for(const [k,v] of shiftFreq.entries()){
+    if(v>bestF){bestF=v; modeShift=k;}
+  }
+
+  return {
+    spins: spinsDay.length,
+    bets, hits, hitRate,
+    worstStreak: worst,
+    pnl, maxDD,
+    worstStakeStep,
+    paramSummary: {
+      avgShift: paramCount ? (sumShift/paramCount) : null,
+      modeShift,
+      avgA: paramCount ? (sumA/paramCount) : null,
+      avgB: paramCount ? (sumB/paramCount) : null,
+      paramCount,
+      capBreaches
+    }
+  };
+}
+
+/* =========================
+   CSV RUN (async batches)
+========================= */
+let csvRunning=false;
+
+async function runCsv(){
+  if(csvRunning) return;
+  csvRunning=true;
+  runCsvBtn.disabled=true;
+
+  dayBody.innerHTML="";
+  dayParamBody.innerHTML="";
+  csvResults.style.display="none";
+  csvProgWrap.style.display="block";
+  csvProgText.textContent="Loading CSV…";
+  csvProgBar.style.width="0%";
+
+  try{
+    const {headers, cols} = await loadCsvFile();
+    const days = cols.map((spins,i)=>({name:headers[i]||`Day ${i+1}`, spins}))
+                     .filter(d=>d.spins.length>=2);
+
+    if(days.length===0) throw new Error("No valid day columns found (need at least 2 spins per day).");
+
+    const mode = simMode.value;
+
+    let totalSpins=0,totalBets=0,totalHits=0,totalPnL=0;
+    let totalWorst=0,totalDD=0,totalStep=0;
+
+    // For risk overlay
+    let overallWorstStreak=0;
+    let overallWorstStakeStep=0;
+    let overallMaxDD=0;
+    let losingDays=0;
+
+    // Async loop in batches so UI doesn’t freeze
+    const batchSize = 1;
+    for(let i=0;i<days.length;i+=batchSize){
+      const end = Math.min(days.length, i+batchSize);
+
+      for(let j=i;j<end;j++){
+        const d = days[j];
+        csvProgText.textContent = `Simulating ${j+1}/${days.length}: ${d.name}…`;
+        csvProgBar.style.width = (((j+1)/days.length)*100).toFixed(1)+"%";
+
+        const res = simulateDay(d.spins, mode);
+
+        // totals
+        totalSpins += res.spins;
+        totalBets += res.bets;
+        totalHits += res.hits;
+        totalPnL += res.pnl;
+        totalWorst = Math.max(totalWorst, res.worstStreak);
+        totalDD = Math.max(totalDD, res.maxDD);
+        totalStep = Math.max(totalStep, res.worstStakeStep);
+
+        overallWorstStreak = Math.max(overallWorstStreak, res.worstStreak);
+        overallWorstStakeStep = Math.max(overallWorstStakeStep, res.worstStakeStep);
+        overallMaxDD = Math.max(overallMaxDD, res.maxDD);
+        if(res.pnl < 0) losingDays++;
+
+        // day row
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${d.name}</td>
+          <td>${res.spins}</td>
+          <td>${res.bets}</td>
+          <td>${res.bets?res.hitRate.toFixed(1)+"%":"–"}</td>
+          <td>${res.worstStreak}</td>
+          <td>${formatMoney(res.pnl)}</td>
+          <td>${formatMoney(res.maxDD)}</td>
+          <td>${res.worstStakeStep}</td>
+          <td>${res.worstStreak > +streakCapEl.value ? '<span class="pill bad">CAP</span>' : ''}</td>
+        `;
+        dayBody.appendChild(tr);
+
+        // params summary row
+        const ps = res.paramSummary;
+        const tr2 = document.createElement("tr");
+        tr2.innerHTML = `
+          <td>${d.name}</td>
+          <td>${ps.avgShift==null ? "–" : ps.avgShift.toFixed(2)}</td>
+          <td>${ps.modeShift==null ? "–" : ps.modeShift}</td>
+          <td>${ps.avgA==null ? "–" : ps.avgA.toFixed(2)}</td>
+          <td>${ps.avgB==null ? "–" : ps.avgB.toFixed(2)}</td>
+          <td>${ps.paramCount}</td>
+          <td>${ps.capBreaches}</td>
+        `;
+        dayParamBody.appendChild(tr2);
+      }
+
+      // yield to UI
+      await new Promise(r=>setTimeout(r, 0));
+    }
+
+    tSpins.textContent = totalSpins;
+    tBets.textContent = totalBets;
+    tHit.textContent = totalBets ? ((totalHits/totalBets)*100).toFixed(1)+"%" : "–";
+    tWorst.textContent = totalWorst;
+    tPnL.textContent = formatMoney(totalPnL);
+    tDD.textContent = formatMoney(totalDD);
+    tStep.textContent = totalStep;
+
+    // Risk overlay: bankroll needed for worst martingale run
+    // Total stake per bet = stakePerNumber * coveredCount.
+    // WorstStakeStep = number of doubles from base (0 means base).
+    const coveredCount = (+halfSectorEl.value)*2 + 1;
+    const base = +baseUnit.value;
+    const worstStep = overallWorstStakeStep;
+
+    // Worst-case cumulative loss across a streak of L bets with martingale steps:
+    // sum_{k=0..L-1} (base*2^k)*coveredCount
+    // (this is simplistic; it assumes you lose every bet in that streak)
+    function cumLossForL(L){
+      let sum=0;
+      for(let k=0;k<L;k++){
+        sum += base * Math.pow(2,k) * coveredCount;
+      }
+      return sum;
+    }
+
+    const cap = +streakCapEl.value;
+    const requiredToSurviveCap = cumLossForL(cap);
+
+    riskBox.innerHTML =
+      `<span class="pill neutral">Coverage</span> ${coveredCount} numbers per bet (halfSector=${+halfSectorEl.value})<br>`+
+      `<span class="pill neutral">Worst streak seen</span> ${overallWorstStreak}<br>`+
+      `<span class="pill neutral">Max drawdown</span> ${formatMoney(overallMaxDD)}<br>`+
+      `<span class="pill neutral">Worst martingale step</span> ${overallWorstStakeStep} (0=base, 1=double, …)<br>`+
+      `<span class="pill neutral">To survive streak cap (${cap})</span> approx bankroll >= <b>${formatMoney(requiredToSurviveCap)}</b> (simplified worst-case)<br>`+
+      `<span class="pill neutral">Losing days</span> ${losingDays}`;
+
+    csvProgWrap.style.display="none";
+    csvResults.style.display="block";
+
+  }catch(e){
+    alert(e.message || String(e));
+    csvProgWrap.style.display="none";
+  }finally{
+    csvRunning=false;
+    runCsvBtn.disabled=false;
+  }
+}
+
+function clearCsv(){
+  csvResults.style.display="none";
+  dayBody.innerHTML="";
+  dayParamBody.innerHTML="";
+  csvProgWrap.style.display="none";
+  csvProgBar.style.width="0%";
+}
+
+function formatMoney(x){
+  const s = x>=0 ? "+" : "";
+  return s + x.toFixed(2);
+}
+</script>
+</body>
+</html>
