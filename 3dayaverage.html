@@ -183,6 +183,7 @@
       border-bottom: 1px solid rgba(255,255,255,0.06);
       text-align: left;
       font-size: 0.8rem;
+      vertical-align: top;
     }
     th {
       font-weight: 600;
@@ -219,8 +220,8 @@
     <br />• Computes drift β and curvature γ,
     <br />• Predicts S₄ = S₃ + a·β + b·γ, then adds an extra pocket shift in the spin direction,
     <br />• a, b and the pocket shift are <strong>auto-optimised from your multi-day CSV data</strong>,
-    <br />• Optimiser uses the <strong>previous 3 days</strong> of data to tune parameters for the next day,
-    <br />• And it targets <strong>worst losing streak ≤ 10 spins</strong> on those training days if possible,
+    <br />• Optimiser uses a <strong>rolling 3-day window</strong>: days 1–3 → params for day 4, days 2–4 → params for day 5, etc.,
+    <br />• It tries to keep <strong>worst losing streak ≤ 10 spins</strong> on the 3 training days,
     <br />• A <strong>Martingale</strong> on stake per number, resetting to base after 11 consecutive losses.
   </p>
 
@@ -238,7 +239,7 @@
       </div>
       <p class="small" id="currentParamsText">
         Current model parameters: using defaults (extraShift=3, a=0.33, b=0.67).  
-        Upload and optimise from CSV to auto-tune these using the last 3 days.
+        Upload and optimise from CSV to auto-tune these using rolling 3-day windows.
       </p>
     </div>
   </div>
@@ -383,8 +384,8 @@
           <span class="mono">Day 1,Day 2,Day 3,...</span> and each column contains that day's spins (0–36).
           You can:
           <br />• Run the same model + Martingale for each day separately, or
-          <br />• Optimise <code>a</code>, <code>b</code> and pocket shift using only the <strong>previous 3 days</strong>
-          to pick a parameter set that <strong>keeps worst losing streak ≤ 10</strong> on those days if possible.
+          <br />• Use a <strong>rolling 3-day optimiser</strong>: days 1–3 → params for day 4, days 2–4 → params for day 5, etc.,
+          <br />  targeting <strong>worst losing streak ≤ 10</strong> on those training days.
         </p>
         <input type="file" id="dayCsvInput" accept=".csv" />
         <div style="margin-top:0.4rem;">
@@ -1185,28 +1186,63 @@
       reader.readAsText(file);
     }
 
-    // plain day-by-day using current AUTO_PARAMS
-    runDayCsvBtn.addEventListener("click", () => {
-      loadCsvFile(({ headers, colsSpins }) => {
-        dayCsvTbody.innerHTML = "";
-        dayCsvSummary.innerHTML = "";
+    // ---- Helper to render table for both modes (plain & optimised) ----
+    // perDayConfig (optional): {
+    //   [dayIndex]: { isTraining: boolean, params: {extraShift,aFixed,bFixed} | null }
+    // }
+    function renderDayCsvTable(headers, colsSpins, baseUnit, perDayConfig) {
+      dayCsvTbody.innerHTML = "";
+      dayCsvSummary.innerHTML = "";
 
-        let totalSpins = 0;
-        let totalBets = 0;
-        let totalWins = 0;
-        let totalLosses = 0;
-        let totalProfit = 0;
-        let totalWorstStreak = 0;
+      let totalSpins = 0;
+      let totalBets = 0;
+      let totalWins = 0;
+      let totalLosses = 0;
+      let totalProfit = 0;
+      let totalWorstStreak = 0;
 
-        const baseUnit = getBaseUnit();
-        const dayStats = [];
+      const dayStats = [];
 
-        colsSpins.forEach((spins, colIdx) => {
-          if (spins.length < 2) {
-            return;
+      for (let colIdx = 0; colIdx < colsSpins.length; colIdx++) {
+        const spins = colsSpins[colIdx];
+        if (!spins || spins.length < 2) continue;
+
+        const cfg = perDayConfig ? perDayConfig[colIdx] : null;
+        const isTraining = cfg && cfg.isTraining;
+        const paramsForDay = cfg && cfg.params ? cfg.params : AUTO_PARAMS;
+
+        const dayName = headers[colIdx] || `Day ${colIdx + 1}`;
+        let paramText = "";
+
+        if (cfg) {
+          if (cfg.isTraining) {
+            paramText = `<br><span class="small">Training day (no optimised params yet)</span>`;
+          } else if (cfg.params) {
+            paramText =
+              `<br><span class="small">Params: shift=${cfg.params.extraShift}, ` +
+              `a=${cfg.params.aFixed.toFixed(2)}, b=${cfg.params.bFixed.toFixed(2)}</span>`;
           }
-          const res = simulateSpinsArrayWithParams(spins, baseUnit, AUTO_PARAMS);
-          if (!res) return;
+        }
+
+        let rowHtml = "";
+
+        if (isTraining) {
+          // First 3 valid days: used only for training, not calculated in totals
+          rowHtml = `
+            <td>${dayName}${paramText}</td>
+            <td>–</td>
+            <td>–</td>
+            <td>–</td>
+            <td>–</td>
+            <td>–</td>
+            <td>–</td>
+            <td>–</td>
+            <td>–</td>
+            <td>–</td>
+          `;
+        } else {
+          const res = simulateSpinsArrayWithParams(spins, baseUnit, paramsForDay);
+          if (!res) continue;
 
           totalSpins += res.spinsCount;
           totalBets += res.totalBets;
@@ -1217,12 +1253,10 @@
             totalWorstStreak = res.worstStreak;
           }
 
-          const dayName = headers[colIdx] || `Day ${colIdx + 1}`;
           const hitStr = res.totalBets ? res.hitRate.toFixed(1) + "%" : "–";
 
-          const tr = document.createElement("tr");
-          tr.innerHTML = `
-            <td>${dayName}</td>
+          rowHtml = `
+            <td>${dayName}${paramText}</td>
             <td>${res.spinsCount}</td>
             <td>${res.totalBets}</td>
             <td>${res.wins}</td>
@@ -1233,78 +1267,88 @@
             <td>${res.lastBetResult}</td>
             <td>${formatMoney(res.lastBetPnL)}</td>
           `;
-          dayCsvTbody.appendChild(tr);
 
           dayStats.push({
             dayName,
             profit: res.profit
           });
+        }
+
+        const tr = document.createElement("tr");
+        tr.innerHTML = rowHtml;
+        dayCsvTbody.appendChild(tr);
+      }
+
+      // Totals row
+      totalSpinsCell.textContent = totalSpins;
+      totalBetsCell.textContent = totalBets;
+      totalWinsCell.textContent = totalWins;
+      totalLossesCell.textContent = totalLosses;
+      if (totalBets > 0) {
+        totalHitRateCell.textContent = ((totalWins / totalBets) * 100).toFixed(1) + "%";
+      } else {
+        totalHitRateCell.textContent = "–";
+      }
+      totalWorstStreakCell.textContent = totalWorstStreak;
+      totalProfitCell.textContent = formatMoney(totalProfit);
+
+      if (dayStats.length > 0) {
+        const daysSimulated = dayStats.length;
+        let winningDays = 0;
+        let losingDays = 0;
+        let flatDays = 0;
+        let longestLosingRun = 0;
+        let currentRun = 0;
+
+        let bestDay = dayStats[0];
+        let worstDay = dayStats[0];
+
+        dayStats.forEach(d => {
+          if (d.profit > 0) {
+            winningDays++;
+            currentRun = 0;
+          } else if (d.profit < 0) {
+            losingDays++;
+            currentRun++;
+            if (currentRun > longestLosingRun) longestLosingRun = currentRun;
+          } else {
+            flatDays++;
+            currentRun = 0;
+          }
+
+          if (d.profit > bestDay.profit) bestDay = d;
+          if (d.profit < worstDay.profit) worstDay = d;
         });
 
-        totalSpinsCell.textContent = totalSpins;
-        totalBetsCell.textContent = totalBets;
-        totalWinsCell.textContent = totalWins;
-        totalLossesCell.textContent = totalLosses;
-        if (totalBets > 0) {
-          totalHitRateCell.textContent = ((totalWins / totalBets) * 100).toFixed(1) + "%";
-        } else {
-          totalHitRateCell.textContent = "–";
-        }
-        totalWorstStreakCell.textContent = totalWorstStreak;
-        totalProfitCell.textContent = formatMoney(totalProfit);
+        const avgDailyPnL = totalProfit / daysSimulated;
 
-        if (dayStats.length > 0) {
-          const daysSimulated = dayStats.length;
-          let winningDays = 0;
-          let losingDays = 0;
-          let flatDays = 0;
-          let longestLosingRun = 0;
-          let currentRun = 0;
+        dayCsvSummary.innerHTML =
+          `<strong>Overall Day Analysis (calculated days only):</strong><br>` +
+          `Days simulated: ${daysSimulated}<br>` +
+          `Winning days: ${winningDays}<br>` +
+          `Losing days: ${losingDays}<br>` +
+          `Flat days: ${flatDays}<br>` +
+          `Longest run of consecutive losing days: ${longestLosingRun}<br>` +
+          `Best day P&L: ${formatMoney(bestDay.profit)} (${bestDay.dayName})<br>` +
+          `Worst day P&L: ${formatMoney(worstDay.profit)} (${worstDay.dayName})<br>` +
+          `Average daily P&L: ${formatMoney(avgDailyPnL)}<br>`;
+      } else {
+        dayCsvSummary.textContent = "Overall Day Analysis: No valid calculated days.";
+      }
 
-          let bestDay = dayStats[0];
-          let worstDay = dayStats[0];
+      dayCsvResultsDiv.style.display = "block";
+    }
 
-          dayStats.forEach(d => {
-            if (d.profit > 0) {
-              winningDays++;
-              currentRun = 0;
-            } else if (d.profit < 0) {
-              losingDays++;
-              currentRun++;
-              if (currentRun > longestLosingRun) longestLosingRun = currentRun;
-            } else {
-              flatDays++;
-              currentRun = 0;
-            }
-
-            if (d.profit > bestDay.profit) bestDay = d;
-            if (d.profit < worstDay.profit) worstDay = d;
-          });
-
-          const avgDailyPnL = totalProfit / daysSimulated;
-
-          dayCsvSummary.innerHTML =
-            `<strong>Overall Day Analysis:</strong><br>` +
-            `Days simulated: ${daysSimulated}<br>` +
-            `Winning days: ${winningDays}<br>` +
-            `Losing days: ${losingDays}<br>` +
-            `Flat days: ${flatDays}<br>` +
-            `Longest run of consecutive losing days: ${longestLosingRun}<br>` +
-            `Best day P&L: ${formatMoney(bestDay.profit)} (${bestDay.dayName})<br>` +
-            `Worst day P&L: ${formatMoney(worstDay.profit)} (${worstDay.dayName})<br>` +
-            `Average daily P&L: ${formatMoney(avgDailyPnL)}<br>`;
-        } else {
-          dayCsvSummary.textContent = "Overall Day Analysis: No valid days found in this CSV.";
-        }
-
-        dayCsvResultsDiv.style.display = "block";
+    // plain day-by-day using current AUTO_PARAMS
+    runDayCsvBtn.addEventListener("click", () => {
+      loadCsvFile(({ headers, colsSpins }) => {
+        const baseUnit = getBaseUnit();
+        // No per-day config: uses current AUTO_PARAMS for every calculated day
+        renderDayCsvTable(headers, colsSpins, baseUnit, null);
       });
     });
 
-    // --------- ASYNC OPTIMISER WITH PROGRESS BAR ----------
-    //
-    // NEW: Uses ONLY the previous 3 valid days as training
-    // and targets worst losing streak <= 10 on those days if possible.
+    // --------- ASYNC ROLLING 3-DAY OPTIMISER WITH PROGRESS BAR ----------
 
     let optimiserRunning = false;
 
@@ -1322,21 +1366,34 @@
         });
 
         if (validDayIndices.length < 4) {
-          alert(`Need at least 4 valid days (so 3 previous days to train on and 1 future day). Found only ${validDayIndices.length}.`);
+          alert(`Need at least 4 valid days (so 3 previous days to train and 1 target day). Found only ${validDayIndices.length}.`);
           return;
         }
 
-        // Last valid day is the "target" day (today / next session).
-        const lastValidIdx = validDayIndices[validDayIndices.length - 1];
-
-        // Previous 3 valid days used for training.
-        const trainingIndices = validDayIndices.slice(validDayIndices.length - 4, validDayIndices.length - 1);
-        const trainingSpins = trainingIndices.map(i => colsSpins[i]);
-        const trainingDayNames = trainingIndices.map(i => headers[i] || `Day ${i + 1}`);
-        const targetDayName = headers[lastValidIdx] || `Day ${lastValidIdx + 1}`;
-
         const baseUnit = getBaseUnit();
-        const allDaysSpins = trainingSpins; // ONLY previous 3 days
+
+        // Build rolling windows:
+        // For each target day (4th valid and onwards),
+        // training days = previous 3 valid days.
+        const windows = [];
+        for (let pos = 3; pos < validDayIndices.length; pos++) {
+          const targetIdx = validDayIndices[pos];
+          const trainIdx1 = validDayIndices[pos - 3];
+          const trainIdx2 = validDayIndices[pos - 2];
+          const trainIdx3 = validDayIndices[pos - 1];
+          const trainingIndices = [trainIdx1, trainIdx2, trainIdx3];
+          const trainingSpins = trainingIndices.map(i => colsSpins[i]);
+          const trainingDayNames = trainingIndices.map(i => headers[i] || `Day ${i + 1}`);
+          const targetDayName = headers[targetIdx] || `Day ${targetIdx + 1}`;
+
+          windows.push({
+            targetIdx,
+            trainingIndices,
+            trainingSpins,
+            trainingDayNames,
+            targetDayName
+          });
+        }
 
         // build parameter grid
         const extraShiftOptions = [0, 1, 2, 3, 4, 5];
@@ -1360,17 +1417,28 @@
           return;
         }
 
+        const totalWork = windows.length * totalCombos;
+
         optimiserRunning = true;
         optimiseFromCsvBtn.classList.add("btn-disabled");
         runDayCsvBtn.classList.add("btn-disabled");
         optimiseFromCsvBtn.textContent = "Optimising...";
         optimizerProgressBar.style.width = "0%";
         optimizerStatus.textContent =
-          `Optimising on previous 3 days (${trainingDayNames.join(", ")}) to set params for ${targetDayName}. Scanning ${totalCombos} combos...`;
+          `Rolling optimisation over ${windows.length} target days, ` +
+          `${totalCombos} parameter combos per target (total ${totalWork} evaluations)...`;
 
-        let comboIndex = 0;
-        let best = null;          // best respecting worstStreak <= 10
-        let fallbackBest = null;  // best overall (no <=10 filter)
+        // For each window, we keep its best and fallback best
+        const bestPerWindow = new Array(windows.length).fill(null);
+        const fallbackBestPerWindow = new Array(windows.length).fill(null);
+
+        // map from day index -> chosen param set for that day
+        const bestParamsForDay = {};
+
+        // global counters to drive progress
+        let windowIdx = 0;
+        let comboIdx = 0;
+        let processedGlobal = 0;
 
         function betterCandidate(a, b) {
           // minimise worst streak, then losing days, then maximise profit
@@ -1384,96 +1452,145 @@
         }
 
         function processBatch() {
-          const batchSize = 10; // adjust if you want to go faster/slower
+          const batchSize = 20; // adjust if needed
           let processed = 0;
 
-          while (comboIndex < totalCombos && processed < batchSize) {
-            const p = paramGrid[comboIndex++];
-            const res = simulateAllDaysWithParams(allDaysSpins, baseUnit, p);
+          while (windowIdx < windows.length && processed < batchSize) {
+            const w = windows[windowIdx];
+
+            const p = paramGrid[comboIdx++];
+            const res = simulateAllDaysWithParams(w.trainingSpins, baseUnit, p);
             if (res && res.daysSimulated > 0) {
               const candidate = { ...p, ...res };
 
-              // Always keep a "fallback best" with no constraint
-              if (betterCandidate(fallbackBest, candidate)) {
-                fallbackBest = candidate;
+              // Fallback best (no constraint)
+              if (betterCandidate(fallbackBestPerWindow[windowIdx], candidate)) {
+                fallbackBestPerWindow[windowIdx] = candidate;
               }
 
-              // Constrained best: worst streak must be <= 10
+              // Constrained best: worst streak <= 10
               if (candidate.totalWorstStreak <= 10) {
-                if (betterCandidate(best, candidate)) {
-                  best = candidate;
+                if (betterCandidate(bestPerWindow[windowIdx], candidate)) {
+                  bestPerWindow[windowIdx] = candidate;
                 }
               }
             }
+
             processed++;
+            processedGlobal++;
+
+            if (comboIdx >= totalCombos) {
+              // done all combos for this window
+              const constrainedBest = bestPerWindow[windowIdx];
+              const fbBest = fallbackBestPerWindow[windowIdx];
+              const finalChoice = constrainedBest || fbBest;
+
+              if (finalChoice) {
+                bestParamsForDay[w.targetIdx] = {
+                  extraShift: finalChoice.extraShift,
+                  aFixed: finalChoice.aFixed,
+                  bFixed: finalChoice.bFixed,
+                  trainingInfo: finalChoice
+                };
+              }
+
+              // move to next window
+              comboIdx = 0;
+              windowIdx++;
+            }
           }
 
           // update progress UI
-          const progress = (comboIndex / totalCombos) * 100;
+          const progress = (processedGlobal / totalWork) * 100;
           optimizerProgressBar.style.width = progress.toFixed(1) + "%";
 
-          const activeBest = best || fallbackBest;
-
-          if (activeBest) {
-            const constraintNote = best
-              ? "Respecting worst streak ≤ 10."
-              : "No combo kept worst streak ≤ 10, showing best overall instead.";
-            optimizerStatus.textContent =
-              `Scanning ${comboIndex}/${totalCombos} combos... ` +
-              `Current best worst streak=${activeBest.totalWorstStreak} ` +
-              `(extraShift=${activeBest.extraShift}, a=${activeBest.aFixed.toFixed(2)}, b=${activeBest.bFixed.toFixed(2)}, ` +
-              `losing days=${activeBest.losingDays}, total P&L=${formatMoney(activeBest.totalProfit)}). ` +
-              constraintNote;
-          } else {
-            optimizerStatus.textContent =
-              `Scanning ${comboIndex}/${totalCombos} combos... (no valid result yet)`;
+          // build a quick status snippet for current/last completed window
+          let statusSnippet = "";
+          if (windowIdx > 0) {
+            const idx = Math.min(windowIdx, windows.length) - 1;
+            const w = windows[idx];
+            const constrainedBest = bestPerWindow[idx];
+            const fbBest = fallbackBestPerWindow[idx];
+            const active = constrainedBest || fbBest;
+            if (active) {
+              const constraintNote = constrainedBest
+                ? "Respecting worst streak ≤ 10."
+                : "No combo kept worst streak ≤ 10; using best overall.";
+              statusSnippet =
+                `Last completed target: ${w.targetDayName} from training days ${w.trainingDayNames.join(", ")}. ` +
+                `Best worst streak=${active.totalWorstStreak}, losing days=${active.losingDays}, ` +
+                `P&L=${formatMoney(active.totalProfit)}. ${constraintNote}`;
+            }
           }
 
-          if (comboIndex < totalCombos) {
-            // yield back to browser, keep UI responsive
+          optimizerStatus.textContent =
+            `Rolling optimisation ${processedGlobal}/${totalWork} evaluations... ` +
+            statusSnippet;
+
+          if (windowIdx < windows.length) {
             requestAnimationFrame(processBatch);
           } else {
-            // done
+            // All windows done
             optimiserRunning = false;
             optimiseFromCsvBtn.classList.remove("btn-disabled");
             runDayCsvBtn.classList.remove("btn-disabled");
             optimiseFromCsvBtn.textContent = "Optimise Model From CSV";
             optimizerProgressBar.style.width = "100%";
 
-            if (!best && !fallbackBest) {
-              optimizerStatus.textContent = "Optimisation finished but no valid combos found.";
+            if (Object.keys(bestParamsForDay).length === 0) {
+              optimizerStatus.textContent = "Optimisation finished but no valid combos found for any target day.";
               return;
             }
 
-            const finalChoice = best || fallbackBest;
-            const usedConstraint = !!best;
+            // Build per-day config to render table.
+            // First 3 valid days = training only (no params / no calculation).
+            const perDayConfig = {};
 
-            // set global AUTO_PARAMS
-            AUTO_PARAMS = {
-              extraShift: finalChoice.extraShift,
-              aFixed: finalChoice.aFixed,
-              bFixed: finalChoice.bFixed
-            };
+            // Mark first 3 valid days as training only
+            for (let i = 0; i < validDayIndices.length && i < 3; i++) {
+              const dIdx = validDayIndices[i];
+              perDayConfig[dIdx] = {
+                isTraining: true,
+                params: null
+              };
+            }
 
-            const constraintLine = usedConstraint
-              ? `Chosen under constraint worst losing streak ≤ 10 on training days.`
-              : `No parameter set could keep worst losing streak ≤ 10; chosen best overall combo instead.`;
+            // For each window (target day), attach its best params
+            windows.forEach((w, wi) => {
+              const param = bestParamsForDay[w.targetIdx];
+              if (!param) return;
+              perDayConfig[w.targetIdx] = {
+                isTraining: false,
+                params: {
+                  extraShift: param.extraShift,
+                  aFixed: param.aFixed,
+                  bFixed: param.bFixed
+                }
+              };
+            });
 
-            optimizerStatus.textContent =
-              `Done. Best parameters from previous 3 days (${trainingDayNames.join(", ")}) ` +
-              `for ${targetDayName}: extraShift=${finalChoice.extraShift}, ` +
-              `a=${finalChoice.aFixed.toFixed(2)}, b=${finalChoice.bFixed.toFixed(2)}. ` +
-              `Optimised over ${finalChoice.daysSimulated} days, ${totalCombos} combos. ` +
-              `Worst losing streak=${finalChoice.totalWorstStreak}; Losing days=${finalChoice.losingDays}; ` +
-              `Total P&L=${formatMoney(finalChoice.totalProfit)}. ` +
-              constraintLine;
+            // Set global AUTO_PARAMS to params of LAST target day (most recent day)
+            const lastWindow = windows[windows.length - 1];
+            const latestParams = bestParamsForDay[lastWindow.targetIdx];
+            if (latestParams) {
+              AUTO_PARAMS = {
+                extraShift: latestParams.extraShift,
+                aFixed: latestParams.aFixed,
+                bFixed: latestParams.bFixed
+              };
 
-            updateCurrentParamsSummary(
-              `Trained on previous 3 days (${trainingDayNames.join(", ")}) ` +
-              `to set parameters for ${targetDayName}. ` +
-              `Worst streak on training days=${finalChoice.totalWorstStreak}, losing days=${finalChoice.losingDays}, ` +
-              `total P&L=${formatMoney(finalChoice.totalProfit)}.`
-            );
+              updateCurrentParamsSummary(
+                `Latest parameters trained from previous 3 valid days for ${lastWindow.targetDayName}: ` +
+                `extraShift=${AUTO_PARAMS.extraShift}, a=${AUTO_PARAMS.aFixed.toFixed(2)}, b=${AUTO_PARAMS.bFixed.toFixed(2)}.`
+              );
+            }
+
+            // Render table with per-day params (first 3 valid days are training only)
+            renderDayCsvTable(headers, colsSpins, baseUnit, perDayConfig);
+
+            optimizerStatus.textContent +=
+              ` Optimisation complete. First 3 valid days are training only; each subsequent day uses ` +
+              `parameters trained on the previous 3 valid days (shown under each day).`;
           }
         }
 
