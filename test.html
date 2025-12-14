@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Adaptive Directional Roulette Predictor (AR3)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<style>
+*{box-sizing:border-box}
+body{margin:0;padding:1rem;background:#0b1020;color:#f5f5f5;font-family:system-ui}
+h1,h2{margin:.3rem 0}
+.grid{display:grid;grid-template-columns:1.2fr 1fr;gap:1rem}
+@media(max-width:900px){.grid{grid-template-columns:1fr}}
+.card{background:#151a2c;border-radius:14px;padding:1rem;border:1px solid rgba(255,255,255,.08)}
+label{display:block;font-size:.85rem;opacity:.85;margin:.4rem 0 .2rem}
+input,select{width:100%;padding:.55rem;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:#0b1020;color:#fff}
+button{border:0;border-radius:999px;padding:.5rem .9rem;font-weight:700;cursor:pointer}
+.btn{background:#ff3366;color:#fff}
+.btn2{background:#27325a;color:#fff}
+.small{font-size:.8rem;opacity:.8}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+
+.wheel{width:360px;height:360px;border-radius:50%;position:relative;margin-top:.7rem;
+background:radial-gradient(circle,rgba(255,255,255,.06),rgba(0,0,0,.35));
+border:1px solid rgba(255,255,255,.1)}
+.pocket{position:absolute;left:50%;top:50%;transform-origin:0 0}
+.chip{width:32px;height:22px;border-radius:8px;
+display:flex;align-items:center;justify-content:center;
+font-weight:800;font-size:12px;color:#fff;
+border:1px solid rgba(255,255,255,.15);
+transform:translate(-50%,-50%)}
+.red{background:#c5283d}
+.black{background:#111827}
+.green{background:#0b7a3a}
+.covered{outline:2px solid #5ad4ff}
+.pred{outline:3px solid #ff3366}
+
+.next{font-size:2rem;font-weight:900}
+</style>
+</head>
+
+<body>
+
+<h1>Adaptive Directional Roulette Predictor</h1>
+<p class="small">Per-spin adaptive AR(3) regression using upcoming CW / CCW direction.</p>
+
+<div class="grid">
+
+<!-- LIVE -->
+<div class="card">
+<h2>Live Mode</h2>
+
+<label>Add spin (0–36)</label>
+<input id="spinInput" type="number" min="0" max="36" placeholder="press Enter">
+
+<div style="margin-top:.4rem">
+<button class="btn" onclick="addSpin()">Add</button>
+<button class="btn2" onclick="resetLive()">Reset</button>
+<button class="btn2" onclick="exportTxt()">Export</button>
+</div>
+
+<div id="status" class="small" style="margin-top:.5rem"></div>
+
+<div style="display:flex;gap:1rem;flex-wrap:wrap">
+<div class="wheel" id="wheel"></div>
+
+<div>
+<div class="small">Next predicted centre</div>
+<div class="next" id="nextCentre">–</div>
+<div class="small mono" id="nextMeta"></div>
+</div>
+</div>
+</div>
+
+<!-- SETTINGS -->
+<div class="card">
+<h2>Settings</h2>
+
+<label>Neighbour half-sector</label>
+<input id="half" type="number" value="8" min="1" max="18">
+
+<label>Directional window N</label>
+<input id="windowN" type="number" value="6" min="5" max="25">
+
+<label>Streak cap (optimiser)</label>
+<input id="streakCap" type="number" value="10">
+
+<label>Shift search range</label>
+<select id="shiftRange">
+<option value="0,1,2,3,4,5">0–5</option>
+<option value="0,1,2,3,4,5,6,7,8,9,10">0–10</option>
+</select>
+
+</div>
+</div>
+
+<script>
+/* ===== Wheel ===== */
+const WHEEL=[0,32,15,19,4,21,2,25,17,34,6,27,13,36,11,30,8,23,10,5,24,16,33,1,20,14,31,9,22,18,29,7,28,12,35,3,26];
+const IDX={};WHEEL.forEach((n,i)=>IDX[n]=i);
+const RED=new Set([1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]);
+
+const wheelEl=document.getElementById("wheel");
+const pocketMap=new Map();
+function buildWheel(){
+wheelEl.innerHTML="";
+pocketMap.clear();
+const r=160;
+WHEEL.forEach((n,i)=>{
+const a=-Math.PI/2+i/WHEEL.length*2*Math.PI;
+const p=document.createElement("div");
+p.className="pocket";
+p.style.transform=`translate(${Math.cos(a)*r}px,${Math.sin(a)*r}px)`;
+const c=document.createElement("div");
+c.className=`chip ${n===0?"green":RED.has(n)?"red":"black"}`;
+c.textContent=n;
+p.appendChild(c);
+wheelEl.appendChild(p);
+pocketMap.set(n,c);
+});
+}
+buildWheel();
+
+/* ===== Maths ===== */
+function dir(i){return i%2===0?"CW":"CCW";}
+function distances(arr){
+let out=[];
+for(let i=1;i<arr.length;i++){
+const a=IDX[arr[i-1]],b=IDX[arr[i]];
+const d=dir(i)==="CW"?(b-a+37)%37:(a-b+37)%37;
+out.push({d,idx:i});
+}
+return out;
+}
+
+function fitAR3(vals){
+if(vals.length<6) return null;
+let X=[[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]];
+let Y=[0,0,0,0];
+for(let i=3;i<vals.length;i++){
+const v=[1,vals[i-1],vals[i-2],vals[i-3]];
+for(let r=0;r<4;r++){
+Y[r]+=v[r]*vals[i];
+for(let c=0;c<4;c++)X[r][c]+=v[r]*v[c];
+}
+}
+for(let i=0;i<4;i++)X[i][i]+=1e-4;
+for(let i=0;i<4;i++){
+let p=i;
+for(let r=i+1;r<4;r++)if(Math.abs(X[r][i])>Math.abs(X[p][i]))p=r;
+[X[i],X[p]]=[X[p],X[i]];
+[Y[i],Y[p]]=[Y[p],Y[i]];
+let d=X[i][i];
+for(let c=i;c<4;c++)X[i][c]/=d;
+Y[i]/=d;
+for(let r=0;r<4;r++){
+if(r===i)continue;
+let f=X[r][i];
+for(let c=i;c<4;c++)X[r][c]-=f*X[i][c];
+Y[r]-=f*Y[i];
+}
+}
+return {a:Y[0],b1:Y[1],b2:Y[2],b3:Y[3]};
+}
+
+function predictCentre(hist,shift){
+const d=distances(hist).filter(x=>dir(hist.length)===dir(x.idx)).map(x=>x.d);
+if(d.length<6)return null;
+const c=fitAR3(d);
+if(!c)return null;
+let s=Math.round(c.a+c.b1*d.at(-1)+c.b2*d.at(-2)+c.b3*d.at(-3));
+s=(s+shift+37)%37;
+const li=IDX[hist.at(-1)];
+return WHEEL[dir(hist.length)==="CW"?(li+s)%37:(li-s+74)%37];
+}
+
+/* ===== Live ===== */
+let spins=[];
+const spinInput=document.getElementById("spinInput");
+spinInput.addEventListener("keydown",e=>{if(e.key==="Enter")addSpin();});
+
+function addSpin(){
+const v=parseInt(spinInput.value);
+if(isNaN(v)||v<0||v>36)return;
+spinInput.value="";
+spins.push(v);
+update();
+}
+
+function resetLive(){
+spins=[];
+update();
+}
+
+function exportTxt(){
+const b=new Blob([spins.join("\n")],{type:"text/plain"});
+const a=document.createElement("a");
+a.href=URL.createObjectURL(b);
+a.download="spins.txt";
+a.click();
+}
+
+function update(){
+pocketMap.forEach(c=>c.classList.remove("covered","pred"));
+document.getElementById("status").textContent=`Spins: ${spins.length}`;
+document.getElementById("nextCentre").textContent="–";
+document.getElementById("nextMeta").textContent="";
+
+const centre=predictCentre(spins,2);
+if(centre==null)return;
+
+const half=+document.getElementById("half").value;
+const idx=IDX[centre];
+const cov=[];
+for(let i=-half;i<=half;i++)cov.push(WHEEL[(idx+i+37)%37]);
+
+cov.forEach(n=>pocketMap.get(n)?.classList.add("covered"));
+pocketMap.get(centre)?.classList.add("pred");
+
+document.getElementById("nextCentre").textContent=centre;
+document.getElementById("nextMeta").textContent=`Covered ${cov.length} numbers`;
+}
+
+update();
+</script>
+</body>
+</html>
