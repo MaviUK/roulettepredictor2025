@@ -2,226 +2,615 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Adaptive Directional Roulette Predictor (AR3)</title>
+<title>Adaptive Directional Roulette Predictor (AR3) + Import + Historic Replay</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 
 <style>
 *{box-sizing:border-box}
 body{margin:0;padding:1rem;background:#0b1020;color:#f5f5f5;font-family:system-ui}
-h1,h2{margin:.3rem 0}
+h1,h2,h3{margin:.35rem 0}
 .grid{display:grid;grid-template-columns:1.2fr 1fr;gap:1rem}
 @media(max-width:900px){.grid{grid-template-columns:1fr}}
 .card{background:#151a2c;border-radius:14px;padding:1rem;border:1px solid rgba(255,255,255,.08)}
 label{display:block;font-size:.85rem;opacity:.85;margin:.4rem 0 .2rem}
-input,select{width:100%;padding:.55rem;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:#0b1020;color:#fff}
-button{border:0;border-radius:999px;padding:.5rem .9rem;font-weight:700;cursor:pointer}
+input,select,textarea{width:100%;padding:.55rem;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:#0b1020;color:#fff}
+textarea{min-height:110px;resize:vertical}
+.row{display:flex;gap:.6rem;flex-wrap:wrap}
+.row>*{flex:1;min-width:180px}
+button{border:0;border-radius:999px;padding:.5rem .9rem;font-weight:800;cursor:pointer}
 .btn{background:#ff3366;color:#fff}
 .btn2{background:#27325a;color:#fff}
-.small{font-size:.8rem;opacity:.8}
+button:disabled{opacity:.5;cursor:not-allowed}
+.small{font-size:.82rem;opacity:.82;line-height:1.35}
 .mono{font-family:ui-monospace,Menlo,Consolas,monospace}
 
-.wheel{width:360px;height:360px;border-radius:50%;position:relative;margin-top:.7rem;
+.wheelWrap{display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-start;margin-top:.8rem}
+.wheel{width:360px;height:360px;border-radius:50%;position:relative;
 background:radial-gradient(circle,rgba(255,255,255,.06),rgba(0,0,0,.35));
 border:1px solid rgba(255,255,255,.1)}
-.pocket{position:absolute;left:50%;top:50%;transform-origin:0 0}
-.chip{width:32px;height:22px;border-radius:8px;
-display:flex;align-items:center;justify-content:center;
-font-weight:800;font-size:12px;color:#fff;
-border:1px solid rgba(255,255,255,.15);
-transform:translate(-50%,-50%)}
+@media(max-width:480px){.wheel{width:320px;height:320px}}
+.pocket{position:absolute;left:50%;top:50%;transform-origin:0 0;pointer-events:none}
+.chip{width:32px;height:22px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+font-weight:900;font-size:12px;color:#fff;border:1px solid rgba(255,255,255,.15);
+transform:translate(-50%,-50%);box-shadow:0 6px 14px rgba(0,0,0,.25)}
 .red{background:#c5283d}
 .black{background:#111827}
 .green{background:#0b7a3a}
-.covered{outline:2px solid #5ad4ff}
-.pred{outline:3px solid #ff3366}
+.covered{outline:2px solid rgba(90,212,255,.95);outline-offset:2px}
+.pred{outline:3px solid rgba(255,51,102,1);outline-offset:2px}
 
-.next{font-size:2rem;font-weight:900}
+.nextBox{min-width:240px;flex:1;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);
+border-radius:12px;padding:.8rem}
+.next{font-size:2.2rem;font-weight:950;line-height:1}
+.pill{display:inline-flex;align-items:center;padding:.2rem .55rem;border-radius:999px;font-size:.72rem;font-weight:900;margin-right:.35rem}
+.neutral{background:rgba(130,150,255,.15);color:#b3bfff}
+.good{background:rgba(0,200,140,.15);color:#4cf3b6}
+.bad{background:rgba(255,120,80,.15);color:#ffb899}
+
+table{width:100%;border-collapse:collapse;margin-top:.5rem}
+th,td{border-bottom:1px solid rgba(255,255,255,.08);padding:.35rem .35rem;text-align:left;font-size:.85rem}
+th{opacity:.9}
 </style>
 </head>
 
 <body>
 
-<h1>Adaptive Directional Roulette Predictor</h1>
-<p class="small">Per-spin adaptive AR(3) regression using upcoming CW / CCW direction.</p>
+<h1>Adaptive Directional Roulette Predictor (AR3)</h1>
+<p class="small">
+Per-spin refit using upcoming CW/CCW direction. Import spins → run historic replay → see stats.
+</p>
 
 <div class="grid">
 
-<!-- LIVE -->
-<div class="card">
-<h2>Live Mode</h2>
+  <!-- LEFT: LIVE -->
+  <div class="card">
+    <h2>Live Mode</h2>
 
-<label>Add spin (0–36)</label>
-<input id="spinInput" type="number" min="0" max="36" placeholder="press Enter">
+    <div class="row">
+      <div>
+        <label>Add spin (0–36)</label>
+        <input id="spinInput" type="number" min="0" max="36" placeholder="Press Enter">
+        <div class="small">Tip: press <b>Enter</b> to add quickly.</div>
+      </div>
+      <div style="flex:0;min-width:340px">
+        <label>&nbsp;</label>
+        <button class="btn" id="addBtn" type="button">Add</button>
+        <button class="btn2" type="button" onclick="resetLive()">Reset</button>
+        <button class="btn2" type="button" onclick="exportTxt()">Export .txt</button>
+      </div>
+    </div>
 
-<div style="margin-top:.4rem">
-<button class="btn" onclick="addSpin()">Add</button>
-<button class="btn2" onclick="resetLive()">Reset</button>
-<button class="btn2" onclick="exportTxt()">Export</button>
-</div>
+    <div class="row">
+      <div>
+        <label>Import file into Live (.txt / .csv)</label>
+        <input id="fileInput" type="file" accept=".txt,.csv">
+        <div class="small">Accepts numbers split by commas/spaces/newlines. Values must be 0–36.</div>
+      </div>
+      <div style="flex:0;min-width:340px">
+        <label>&nbsp;</label>
+        <button class="btn2" type="button" onclick="importFileToLive()">Import File → Live</button>
+      </div>
+    </div>
 
-<div id="status" class="small" style="margin-top:.5rem"></div>
+    <label>Paste spins (bulk) → Load into Live</label>
+    <textarea id="bulkBox" placeholder="Example: 26 34 16 4 10 10 27 ..."></textarea>
+    <div style="margin-top:.35rem">
+      <button class="btn2" type="button" onclick="loadBulkToLive()">Load Bulk → Live</button>
+      <button class="btn2" type="button" onclick="appendBulkToLive()">Append Bulk</button>
+    </div>
 
-<div style="display:flex;gap:1rem;flex-wrap:wrap">
-<div class="wheel" id="wheel"></div>
+    <div id="status" class="small" style="margin-top:.6rem"></div>
 
-<div>
-<div class="small">Next predicted centre</div>
-<div class="next" id="nextCentre">–</div>
-<div class="small mono" id="nextMeta"></div>
-</div>
-</div>
-</div>
+    <div class="wheelWrap">
+      <div class="wheel" id="wheel"></div>
+      <div class="nextBox">
+        <div class="small"><span class="pill neutral">NEXT</span> Predicted centre</div>
+        <div class="next" id="nextCentre">–</div>
+        <div class="small mono" id="nextMeta">No prediction yet.</div>
+        <div class="small" style="margin-top:.65rem"><span class="pill neutral">LIVE COUNT</span></div>
+        <div class="small mono" id="liveCount">0 spins</div>
+      </div>
+    </div>
+  </div>
 
-<!-- SETTINGS -->
-<div class="card">
-<h2>Settings</h2>
+  <!-- RIGHT: SETTINGS + HISTORIC -->
+  <div class="card">
+    <h2>Settings</h2>
 
-<label>Neighbour half-sector</label>
-<input id="half" type="number" value="8" min="1" max="18">
+    <div class="row">
+      <div>
+        <label>Neighbour half-sector</label>
+        <input id="half" type="number" value="8" min="1" max="18">
+        <div class="small">8 = cover 17 numbers (centre + 8 each side)</div>
+      </div>
+      <div>
+        <label>Directional window N</label>
+        <input id="windowN" type="number" value="6" min="5" max="25">
+        <div class="small">Needs at least 6 directional distances in upcoming direction.</div>
+      </div>
+    </div>
 
-<label>Directional window N</label>
-<input id="windowN" type="number" value="6" min="5" max="25">
+    <label>Shift search range</label>
+    <select id="shiftRange">
+      <option value="0,1,2,3,4,5" selected>0–5</option>
+      <option value="0,1,2,3,4,5,6,7,8,9,10">0–10</option>
+    </select>
 
-<label>Streak cap (optimiser)</label>
-<input id="streakCap" type="number" value="10">
+    <div style="margin-top:1rem">
+      <h2>Historic Replay (Simulator)</h2>
+      <p class="small">
+        Replays the entire current Live spin list as history and computes:
+        Bets, Hit%, Worst losing streak (by bets, not by spins).
+      </p>
+      <button class="btn" type="button" onclick="runHistoricReplay()">Run Historic Replay</button>
+      <div id="simOut" class="small" style="margin-top:.6rem"></div>
 
-<label>Shift search range</label>
-<select id="shiftRange">
-<option value="0,1,2,3,4,5">0–5</option>
-<option value="0,1,2,3,4,5,6,7,8,9,10">0–10</option>
-</select>
+      <div id="simTableWrap" style="display:none">
+        <h3 style="margin-top:.8rem">Replay Breakdown</h3>
+        <table class="mono">
+          <thead>
+            <tr>
+              <th>Spins</th><th>Bets</th><th>Hits</th><th>Hit%</th><th>Worst Streak</th>
+            </tr>
+          </thead>
+          <tbody id="simTbody"></tbody>
+        </table>
+      </div>
+    </div>
 
-</div>
+  </div>
+
 </div>
 
 <script>
-/* ===== Wheel ===== */
+/* =========================
+   WHEEL + COLOURS
+========================= */
 const WHEEL=[0,32,15,19,4,21,2,25,17,34,6,27,13,36,11,30,8,23,10,5,24,16,33,1,20,14,31,9,22,18,29,7,28,12,35,3,26];
-const IDX={};WHEEL.forEach((n,i)=>IDX[n]=i);
+const IDX={}; WHEEL.forEach((n,i)=>IDX[n]=i);
 const RED=new Set([1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]);
+function colourOf(n){ return n===0 ? "green" : (RED.has(n) ? "red" : "black"); }
 
 const wheelEl=document.getElementById("wheel");
 const pocketMap=new Map();
 function buildWheel(){
-wheelEl.innerHTML="";
-pocketMap.clear();
-const r=160;
-WHEEL.forEach((n,i)=>{
-const a=-Math.PI/2+i/WHEEL.length*2*Math.PI;
-const p=document.createElement("div");
-p.className="pocket";
-p.style.transform=`translate(${Math.cos(a)*r}px,${Math.sin(a)*r}px)`;
-const c=document.createElement("div");
-c.className=`chip ${n===0?"green":RED.has(n)?"red":"black"}`;
-c.textContent=n;
-p.appendChild(c);
-wheelEl.appendChild(p);
-pocketMap.set(n,c);
+  wheelEl.innerHTML="";
+  pocketMap.clear();
+
+  const rect = wheelEl.getBoundingClientRect();
+  const size = Math.min(rect.width, rect.height);
+  const r = size * 0.46;
+
+  for(let i=0;i<WHEEL.length;i++){
+    const n=WHEEL[i];
+    const ang = -Math.PI/2 + (i/WHEEL.length)*2*Math.PI;
+
+    const x = (size/2) + Math.cos(ang)*r;
+    const y = (size/2) + Math.sin(ang)*r;
+
+    const p=document.createElement("div");
+    p.className="pocket";
+    p.style.left = x+"px";
+    p.style.top  = y+"px";
+
+    const c=document.createElement("div");
+    c.className=`chip ${colourOf(n)}`;
+    c.textContent=n;
+
+    p.appendChild(c);
+    wheelEl.appendChild(p);
+    pocketMap.set(n,c);
+  }
+}
+window.addEventListener("load", buildWheel);
+window.addEventListener("resize", ()=>{
+  buildWheel();
+  if(lastPrediction && typeof lastPrediction.centre==="number"){
+    highlightWheel(lastPrediction.centre, lastPrediction.covered);
+  }
 });
+function clearWheel(){
+  pocketMap.forEach(ch=>ch.classList.remove("covered","pred"));
 }
-buildWheel();
-
-/* ===== Maths ===== */
-function dir(i){return i%2===0?"CW":"CCW";}
-function distances(arr){
-let out=[];
-for(let i=1;i<arr.length;i++){
-const a=IDX[arr[i-1]],b=IDX[arr[i]];
-const d=dir(i)==="CW"?(b-a+37)%37:(a-b+37)%37;
-out.push({d,idx:i});
-}
-return out;
+function highlightWheel(centre, covered){
+  clearWheel();
+  if(Array.isArray(covered)){
+    covered.forEach(n=>pocketMap.get(n)?.classList.add("covered"));
+  }
+  if(typeof centre==="number"){
+    pocketMap.get(centre)?.classList.add("pred");
+  }
 }
 
+/* =========================
+   CORE HELPERS
+========================= */
+const spinInput = document.getElementById("spinInput");
+const addBtn = document.getElementById("addBtn");
+const statusEl = document.getElementById("status");
+const nextCentreEl = document.getElementById("nextCentre");
+const nextMetaEl = document.getElementById("nextMeta");
+const liveCountEl = document.getElementById("liveCount");
+
+addBtn.addEventListener("click", ()=>addSpin());
+spinInput.addEventListener("keydown", (e)=>{
+  if(e.key==="Enter"){
+    e.preventDefault();
+    addSpin();
+  }
+});
+
+function parseShiftOptions(){
+  return document.getElementById("shiftRange").value.split(",")
+    .map(x=>parseInt(x,10))
+    .filter(Number.isFinite);
+}
+
+function dirForSpinIndex(i){ // i is index of the CURRENT spin (0-based)
+  return i%2===0 ? "CW" : "CCW";
+}
+function dirForDistanceIndex(i){ // distance from spin i-1 -> i uses direction of spin i
+  return i%2===0 ? "CW" : "CCW";
+}
+
+function neighbours(centre, half){
+  const idx=IDX[centre];
+  if(idx==null) return [];
+  const out=[];
+  for(let o=-half;o<=half;o++){
+    out.push(WHEEL[(idx+o+37)%37]);
+  }
+  return out;
+}
+
+function buildDistances(history){
+  const out=[];
+  for(let i=1;i<history.length;i++){
+    const a=IDX[history[i-1]], b=IDX[history[i]];
+    if(a==null||b==null) continue;
+    const d = (dirForDistanceIndex(i)==="CW") ? (b-a+37)%37 : (a-b+37)%37;
+    out.push({dir:dirForDistanceIndex(i), dist:d, spinIndex:i}); // spinIndex i produced this distance
+  }
+  return out;
+}
+
+/* =========================
+   AR(3) FIT
+   y = a + b1*x1 + b2*x2 + b3*x3
+   using directional distances sequence
+========================= */
 function fitAR3(vals){
-if(vals.length<6) return null;
-let X=[[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]];
-let Y=[0,0,0,0];
-for(let i=3;i<vals.length;i++){
-const v=[1,vals[i-1],vals[i-2],vals[i-3]];
-for(let r=0;r<4;r++){
-Y[r]+=v[r]*vals[i];
-for(let c=0;c<4;c++)X[r][c]+=v[r]*v[c];
-}
-}
-for(let i=0;i<4;i++)X[i][i]+=1e-4;
-for(let i=0;i<4;i++){
-let p=i;
-for(let r=i+1;r<4;r++)if(Math.abs(X[r][i])>Math.abs(X[p][i]))p=r;
-[X[i],X[p]]=[X[p],X[i]];
-[Y[i],Y[p]]=[Y[p],Y[i]];
-let d=X[i][i];
-for(let c=i;c<4;c++)X[i][c]/=d;
-Y[i]/=d;
-for(let r=0;r<4;r++){
-if(r===i)continue;
-let f=X[r][i];
-for(let c=i;c<4;c++)X[r][c]-=f*X[i][c];
-Y[r]-=f*Y[i];
-}
-}
-return {a:Y[0],b1:Y[1],b2:Y[2],b3:Y[3]};
+  // Need at least 6 to have enough points for stable fit
+  if(vals.length < 6) return null;
+
+  // Normal equations for 4 params
+  const A = [
+    [0,0,0,0],
+    [0,0,0,0],
+    [0,0,0,0],
+    [0,0,0,0]
+  ];
+  const B = [0,0,0,0];
+
+  for(let i=3;i<vals.length;i++){
+    const y = vals[i];
+    const v = [1, vals[i-1], vals[i-2], vals[i-3]];
+    for(let r=0;r<4;r++){
+      B[r]+= v[r]*y;
+      for(let c=0;c<4;c++){
+        A[r][c]+= v[r]*v[c];
+      }
+    }
+  }
+
+  // ridge
+  for(let i=0;i<4;i++) A[i][i]+=1e-4;
+
+  // Gauss-Jordan
+  for(let i=0;i<4;i++){
+    let p=i;
+    for(let r=i+1;r<4;r++){
+      if(Math.abs(A[r][i]) > Math.abs(A[p][i])) p=r;
+    }
+    [A[i],A[p]]=[A[p],A[i]];
+    [B[i],B[p]]=[B[p],B[i]];
+
+    const div=A[i][i];
+    if(Math.abs(div) < 1e-12) return null;
+
+    for(let c=i;c<4;c++) A[i][c]/=div;
+    B[i]/=div;
+
+    for(let r=0;r<4;r++){
+      if(r===i) continue;
+      const f=A[r][i];
+      for(let c=i;c<4;c++) A[r][c]-=f*A[i][c];
+      B[r]-=f*B[i];
+    }
+  }
+
+  return {a:B[0], b1:B[1], b2:B[2], b3:B[3]};
 }
 
-function predictCentre(hist,shift){
-const d=distances(hist).filter(x=>dir(hist.length)===dir(x.idx)).map(x=>x.d);
-if(d.length<6)return null;
-const c=fitAR3(d);
-if(!c)return null;
-let s=Math.round(c.a+c.b1*d.at(-1)+c.b2*d.at(-2)+c.b3*d.at(-3));
-s=(s+shift+37)%37;
-const li=IDX[hist.at(-1)];
-return WHEEL[dir(hist.length)==="CW"?(li+s)%37:(li-s+74)%37];
+/* =========================
+   PER-SPIN ADAPTIVE PARAMS
+   - Fit AR3 on last N directional distances for upcoming direction
+   - Search shift range and choose highest hit% over evaluation window
+========================= */
+function chooseParamsForNext(history){
+  const N = +document.getElementById("windowN").value;
+  const half = +document.getElementById("half").value;
+  const shiftOptions = parseShiftOptions();
+
+  const dists = buildDistances(history);
+  const upcomingDir = dirForSpinIndex(history.length); // direction of next spin index
+  const usable = dists.filter(x=>x.dir===upcomingDir);
+
+  // Need at least N directional distances for upcoming direction
+  if(usable.length < N) return null;
+
+  // Fit on last N directional distances
+  const fitVals = usable.slice(-N).map(x=>x.dist);
+  const model = fitAR3(fitVals);
+  if(!model) return null;
+
+  // Evaluate candidate shifts over recent evaluation records
+  // We'll evaluate on the subset where we can form a prediction and have a next result.
+  // Use last (N-1) records (small, but keeps it consistent).
+  const evalRecs = usable.slice(-(Math.max(5, Math.min(N-1, 10)))); // 5..10 eval points
+
+  let best=null;
+
+  for(const shift of shiftOptions){
+    let bets=0,hits=0;
+
+    for(const rec of evalRecs){
+      const s = rec.spinIndex;
+      if(s+1 >= history.length) continue;
+
+      // predict for spin s+1 using history up to s
+      const h = history.slice(0, s+1);
+      const pred = predictCentreFromModel(h, model, shift);
+      if(pred==null) continue;
+
+      const covered = neighbours(pred, half);
+      const result = history[s+1];
+
+      bets++;
+      if(covered.includes(result)) hits++;
+    }
+
+    if(bets===0) continue;
+    const hitRate = hits/bets;
+
+    if(!best || hitRate > best.hitRate){
+      best = {shift, model, hitRate, bets};
+    }
+  }
+
+  if(!best) return null;
+  return best;
 }
 
-/* ===== Live ===== */
-let spins=[];
-const spinInput=document.getElementById("spinInput");
-spinInput.addEventListener("keydown",e=>{if(e.key==="Enter")addSpin();});
+function predictCentreFromModel(history, model, shift){
+  // Need enough directional distances in upcoming direction to take last 3 Xs
+  const dists = buildDistances(history);
+  const upcomingDir = dirForSpinIndex(history.length);
+  const usable = dists.filter(x=>x.dir===upcomingDir).map(x=>x.dist);
+  if(usable.length < 3) return null;
+
+  const x1 = usable[usable.length-1];
+  const x2 = usable[usable.length-2];
+  const x3 = usable[usable.length-3];
+
+  let step = Math.round(model.a + model.b1*x1 + model.b2*x2 + model.b3*x3);
+  step = (step + shift) % 37;
+  step = (step + 37) % 37;
+
+  const lastIdx = IDX[history[history.length-1]];
+  if(lastIdx==null) return null;
+
+  const centreIdx = (upcomingDir==="CW")
+    ? (lastIdx + step) % 37
+    : (lastIdx - step + 74) % 37;
+
+  return WHEEL[centreIdx];
+}
+
+/* =========================
+   LIVE STATE
+========================= */
+let spins = [];
+let lastPrediction = null;
 
 function addSpin(){
-const v=parseInt(spinInput.value);
-if(isNaN(v)||v<0||v>36)return;
-spinInput.value="";
-spins.push(v);
-update();
+  const v = parseInt(spinInput.value,10);
+  if(!Number.isFinite(v) || v<0 || v>36) return;
+  spinInput.value="";
+  spins.push(v);
+  refreshLive();
 }
 
 function resetLive(){
-spins=[];
-update();
+  spins = [];
+  lastPrediction = null;
+  refreshLive();
+  spinInput.focus();
 }
 
 function exportTxt(){
-const b=new Blob([spins.join("\n")],{type:"text/plain"});
-const a=document.createElement("a");
-a.href=URL.createObjectURL(b);
-a.download="spins.txt";
-a.click();
+  if(!spins.length){ alert("No spins to export."); return; }
+  const blob = new Blob([spins.join("\n")], {type:"text/plain"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href=url;
+  a.download="roulette_spins_live.txt";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(()=>{document.body.removeChild(a);URL.revokeObjectURL(url);},0);
 }
 
-function update(){
-pocketMap.forEach(c=>c.classList.remove("covered","pred"));
-document.getElementById("status").textContent=`Spins: ${spins.length}`;
-document.getElementById("nextCentre").textContent="–";
-document.getElementById("nextMeta").textContent="";
+function refreshLive(){
+  liveCountEl.textContent = `${spins.length} spins`;
+  statusEl.textContent = "";
 
-const centre=predictCentre(spins,2);
-if(centre==null)return;
+  nextCentreEl.textContent = "–";
+  nextMetaEl.textContent = "No prediction yet.";
+  clearWheel();
 
-const half=+document.getElementById("half").value;
-const idx=IDX[centre];
-const cov=[];
-for(let i=-half;i<=half;i++)cov.push(WHEEL[(idx+i+37)%37]);
+  if(spins.length < 2){
+    statusEl.innerHTML = `<span class="pill neutral">WAIT</span> Add more spins.`;
+    return;
+  }
 
-cov.forEach(n=>pocketMap.get(n)?.classList.add("covered"));
-pocketMap.get(centre)?.classList.add("pred");
+  const chosen = chooseParamsForNext(spins);
+  if(!chosen){
+    const dists = buildDistances(spins);
+    const upcomingDir = dirForSpinIndex(spins.length);
+    const have = dists.filter(x=>x.dir===upcomingDir).length;
+    const need = +document.getElementById("windowN").value;
+    statusEl.innerHTML = `<span class="pill neutral">WAIT</span> Need ${need} ${upcomingDir} directional distances (have ${have}).`;
+    return;
+  }
 
-document.getElementById("nextCentre").textContent=centre;
-document.getElementById("nextMeta").textContent=`Covered ${cov.length} numbers`;
+  const centre = predictCentreFromModel(spins, chosen.model, chosen.shift);
+  if(centre==null){
+    statusEl.innerHTML = `<span class="pill neutral">WAIT</span> Not enough structure yet to predict.`;
+    return;
+  }
+
+  const half = +document.getElementById("half").value;
+  const covered = neighbours(centre, half);
+
+  lastPrediction = {centre, covered, chosen};
+
+  nextCentreEl.textContent = String(centre);
+  nextMetaEl.textContent = `shift=${chosen.shift} • evalHit=${(chosen.hitRate*100).toFixed(1)}% (n=${chosen.bets})`;
+  highlightWheel(centre, covered);
+
+  statusEl.innerHTML = `<span class="pill good">BET</span> Cover ${covered.length} numbers (centre + neighbours).`;
 }
 
-update();
+/* =========================
+   BULK IMPORT (PASTE)
+========================= */
+function parseSpinsText(text){
+  const toks = text.split(/[\s,;]+/).filter(Boolean);
+  const out=[];
+  for(const t of toks){
+    const v = parseInt(t,10);
+    if(Number.isFinite(v) && v>=0 && v<=36) out.push(v);
+  }
+  return out;
+}
+
+function loadBulkToLive(){
+  const txt = document.getElementById("bulkBox").value;
+  const arr = parseSpinsText(txt);
+  if(arr.length<1){ alert("No valid numbers found (0–36)."); return; }
+  spins = arr;
+  lastPrediction = null;
+  refreshLive();
+}
+
+function appendBulkToLive(){
+  const txt = document.getElementById("bulkBox").value;
+  const arr = parseSpinsText(txt);
+  if(arr.length<1){ alert("No valid numbers found (0–36)."); return; }
+  spins = spins.concat(arr);
+  lastPrediction = null;
+  refreshLive();
+}
+
+/* =========================
+   FILE IMPORT → LIVE
+========================= */
+async function importFileToLive(){
+  const fi = document.getElementById("fileInput");
+  const file = fi.files && fi.files[0];
+  if(!file){ alert("Choose a .txt or .csv file first."); return; }
+
+  const text = await file.text();
+  const arr = parseSpinsText(text);
+  if(arr.length<1){ alert("No valid spins found in file."); return; }
+
+  spins = arr;
+  lastPrediction = null;
+  refreshLive();
+}
+
+/* =========================
+   HISTORIC REPLAY
+   (replay using the same next-prediction logic)
+========================= */
+function runHistoricReplay(){
+  const simOut = document.getElementById("simOut");
+  const tbody = document.getElementById("simTbody");
+  const wrap = document.getElementById("simTableWrap");
+
+  wrap.style.display="none";
+  tbody.innerHTML="";
+
+  if(spins.length < 6){
+    simOut.innerHTML = `<span class="pill bad">NO DATA</span> Need more spins in Live first.`;
+    return;
+  }
+
+  const half = +document.getElementById("half").value;
+
+  let bets=0, hits=0;
+  let streak=0, worst=0;
+
+  // We simulate: at each step i we predict next using history[0..i]
+  // and score it against history[i+1]
+  for(let i=0;i<spins.length-1;i++){
+    const hist = spins.slice(0, i+1);
+
+    const chosen = chooseParamsForNext(hist);
+    if(!chosen) continue;
+
+    const centre = predictCentreFromModel(hist, chosen.model, chosen.shift);
+    if(centre==null) continue;
+
+    const covered = neighbours(centre, half);
+    const result = spins[i+1];
+
+    bets++;
+    const hit = covered.includes(result);
+
+    if(hit){
+      hits++;
+      streak = 0;
+    }else{
+      streak++;
+      worst = Math.max(worst, streak);
+    }
+  }
+
+  const hitRate = bets ? (hits/bets)*100 : 0;
+
+  simOut.innerHTML =
+    `<span class="pill neutral">REPLAY</span> `+
+    `Bets=${bets}, Hits=${hits}, Hit%=${hitRate.toFixed(1)}%, Worst streak=${worst}`;
+
+  tbody.innerHTML = `
+    <tr>
+      <td>${spins.length}</td>
+      <td>${bets}</td>
+      <td>${hits}</td>
+      <td>${bets ? hitRate.toFixed(1)+"%" : "–"}</td>
+      <td>${worst}</td>
+    </tr>
+  `;
+  wrap.style.display="block";
+}
+
+/* init */
+window.addEventListener("load", ()=>{
+  spinInput.focus();
+  refreshLive();
+});
 </script>
+
 </body>
 </html>
