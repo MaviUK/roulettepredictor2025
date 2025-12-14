@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Adaptive Directional Roulette Predictor (AR3) + Import + Historic Replay</title>
+<title>Adaptive Directional Roulette Predictor (AR3) + Excel Days Upload</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 
 <style>
@@ -48,8 +48,9 @@ border-radius:12px;padding:.8rem}
 .bad{background:rgba(255,120,80,.15);color:#ffb899}
 
 table{width:100%;border-collapse:collapse;margin-top:.5rem}
-th,td{border-bottom:1px solid rgba(255,255,255,.08);padding:.35rem .35rem;text-align:left;font-size:.85rem}
+th,td{border-bottom:1px solid rgba(255,255,255,.08);padding:.35rem .35rem;text-align:left;font-size:.85rem;vertical-align:top}
 th{opacity:.9}
+.actions{display:flex;gap:.4rem;flex-wrap:wrap}
 </style>
 </head>
 
@@ -57,7 +58,7 @@ th{opacity:.9}
 
 <h1>Adaptive Directional Roulette Predictor (AR3)</h1>
 <p class="small">
-Per-spin refit using upcoming CW/CCW direction. Import spins → run historic replay → see stats.
+Upload <b>.xlsx</b> where row 1 = day names (across columns) and spins are listed underneath each day column.
 </p>
 
 <div class="grid">
@@ -80,21 +81,9 @@ Per-spin refit using upcoming CW/CCW direction. Import spins → run historic re
       </div>
     </div>
 
-    <div class="row">
-      <div>
-        <label>Import file into Live (.txt / .csv)</label>
-        <input id="fileInput" type="file" accept=".txt,.csv">
-        <div class="small">Accepts numbers split by commas/spaces/newlines. Values must be 0–36.</div>
-      </div>
-      <div style="flex:0;min-width:340px">
-        <label>&nbsp;</label>
-        <button class="btn2" type="button" onclick="importFileToLive()">Import File → Live</button>
-      </div>
-    </div>
-
     <label>Paste spins (bulk) → Load into Live</label>
     <textarea id="bulkBox" placeholder="Example: 26 34 16 4 10 10 27 ..."></textarea>
-    <div style="margin-top:.35rem">
+    <div style="margin-top:.35rem" class="actions">
       <button class="btn2" type="button" onclick="loadBulkToLive()">Load Bulk → Live</button>
       <button class="btn2" type="button" onclick="appendBulkToLive()">Append Bulk</button>
     </div>
@@ -113,7 +102,7 @@ Per-spin refit using upcoming CW/CCW direction. Import spins → run historic re
     </div>
   </div>
 
-  <!-- RIGHT: SETTINGS + HISTORIC -->
+  <!-- RIGHT: SETTINGS + EXCEL DAYS -->
   <div class="card">
     <h2>Settings</h2>
 
@@ -121,12 +110,12 @@ Per-spin refit using upcoming CW/CCW direction. Import spins → run historic re
       <div>
         <label>Neighbour half-sector</label>
         <input id="half" type="number" value="8" min="1" max="18">
-        <div class="small">8 = cover 17 numbers (centre + 8 each side)</div>
+        <div class="small">8 = cover 17 numbers</div>
       </div>
       <div>
         <label>Directional window N</label>
         <input id="windowN" type="number" value="6" min="5" max="25">
-        <div class="small">Needs at least 6 directional distances in upcoming direction.</div>
+        <div class="small">Needs at least N directional distances in upcoming direction.</div>
       </div>
     </div>
 
@@ -136,31 +125,57 @@ Per-spin refit using upcoming CW/CCW direction. Import spins → run historic re
       <option value="0,1,2,3,4,5,6,7,8,9,10">0–10</option>
     </select>
 
-    <div style="margin-top:1rem">
-      <h2>Historic Replay (Simulator)</h2>
-      <p class="small">
-        Replays the entire current Live spin list as history and computes:
-        Bets, Hit%, Worst losing streak (by bets, not by spins).
-      </p>
-      <button class="btn" type="button" onclick="runHistoricReplay()">Run Historic Replay</button>
-      <div id="simOut" class="small" style="margin-top:.6rem"></div>
+    <hr style="border:0;border-top:1px solid rgba(255,255,255,.08);margin:1rem 0">
 
-      <div id="simTableWrap" style="display:none">
-        <h3 style="margin-top:.8rem">Replay Breakdown</h3>
-        <table class="mono">
-          <thead>
-            <tr>
-              <th>Spins</th><th>Bets</th><th>Hits</th><th>Hit%</th><th>Worst Streak</th>
-            </tr>
-          </thead>
-          <tbody id="simTbody"></tbody>
-        </table>
-      </div>
+    <h2>Excel / CSV Days Upload</h2>
+    <p class="small">
+      Upload your spreadsheet exactly as you described:
+      <br>• Row 1: Day names across columns (e.g. Day 1, Day 2...)
+      <br>• Rows below: spins 0–36 in each column
+    </p>
+
+    <input id="daysFile" type="file" accept=".xlsx,.xls,.csv" />
+
+    <div class="actions" style="margin-top:.5rem">
+      <button class="btn" type="button" onclick="loadDaysFile()">Load Days</button>
+      <button class="btn2" type="button" onclick="clearDays()">Clear</button>
+    </div>
+
+    <div id="daysStatus" class="small" style="margin-top:.6rem"></div>
+
+    <div id="daysResults" style="display:none;margin-top:.8rem">
+      <h3>Day-by-Day Results (Historic Replay)</h3>
+      <table class="mono">
+        <thead>
+          <tr>
+            <th>Day</th>
+            <th>Spins</th>
+            <th>Bets</th>
+            <th>Hit%</th>
+            <th>Worst Losing Streak</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="daysTbody"></tbody>
+        <tfoot>
+          <tr>
+            <td><b>TOTAL</b></td>
+            <td id="totSpins"></td>
+            <td id="totBets"></td>
+            <td id="totHit"></td>
+            <td id="totWorst"></td>
+            <td></td>
+          </tr>
+        </tfoot>
+      </table>
     </div>
 
   </div>
 
 </div>
+
+<!-- SheetJS for XLSX parsing -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
 <script>
 /* =========================
@@ -176,7 +191,6 @@ const pocketMap=new Map();
 function buildWheel(){
   wheelEl.innerHTML="";
   pocketMap.clear();
-
   const rect = wheelEl.getBoundingClientRect();
   const size = Math.min(rect.width, rect.height);
   const r = size * 0.46;
@@ -184,7 +198,6 @@ function buildWheel(){
   for(let i=0;i<WHEEL.length;i++){
     const n=WHEEL[i];
     const ang = -Math.PI/2 + (i/WHEEL.length)*2*Math.PI;
-
     const x = (size/2) + Math.cos(ang)*r;
     const y = (size/2) + Math.sin(ang)*r;
 
@@ -202,13 +215,6 @@ function buildWheel(){
     pocketMap.set(n,c);
   }
 }
-window.addEventListener("load", buildWheel);
-window.addEventListener("resize", ()=>{
-  buildWheel();
-  if(lastPrediction && typeof lastPrediction.centre==="number"){
-    highlightWheel(lastPrediction.centre, lastPrediction.covered);
-  }
-});
 function clearWheel(){
   pocketMap.forEach(ch=>ch.classList.remove("covered","pred"));
 }
@@ -221,6 +227,13 @@ function highlightWheel(centre, covered){
     pocketMap.get(centre)?.classList.add("pred");
   }
 }
+window.addEventListener("load", buildWheel);
+window.addEventListener("resize", ()=>{
+  buildWheel();
+  if(lastPrediction && typeof lastPrediction.centre==="number"){
+    highlightWheel(lastPrediction.centre, lastPrediction.covered);
+  }
+});
 
 /* =========================
    CORE HELPERS
@@ -269,7 +282,7 @@ function buildDistances(history){
     const a=IDX[history[i-1]], b=IDX[history[i]];
     if(a==null||b==null) continue;
     const d = (dirForDistanceIndex(i)==="CW") ? (b-a+37)%37 : (a-b+37)%37;
-    out.push({dir:dirForDistanceIndex(i), dist:d, spinIndex:i}); // spinIndex i produced this distance
+    out.push({dir:dirForDistanceIndex(i), dist:d, spinIndex:i});
   }
   return out;
 }
@@ -277,13 +290,10 @@ function buildDistances(history){
 /* =========================
    AR(3) FIT
    y = a + b1*x1 + b2*x2 + b3*x3
-   using directional distances sequence
 ========================= */
 function fitAR3(vals){
-  // Need at least 6 to have enough points for stable fit
   if(vals.length < 6) return null;
 
-  // Normal equations for 4 params
   const A = [
     [0,0,0,0],
     [0,0,0,0],
@@ -303,10 +313,8 @@ function fitAR3(vals){
     }
   }
 
-  // ridge
   for(let i=0;i<4;i++) A[i][i]+=1e-4;
 
-  // Gauss-Jordan
   for(let i=0;i<4;i++){
     let p=i;
     for(let r=i+1;r<4;r++){
@@ -333,67 +341,52 @@ function fitAR3(vals){
 }
 
 /* =========================
-   PER-SPIN ADAPTIVE PARAMS
-   - Fit AR3 on last N directional distances for upcoming direction
-   - Search shift range and choose highest hit% over evaluation window
+   PARAM SELECTION (adaptive)
 ========================= */
 function chooseParamsForNext(history){
   const N = +document.getElementById("windowN").value;
-  const half = +document.getElementById("half").value;
   const shiftOptions = parseShiftOptions();
 
   const dists = buildDistances(history);
-  const upcomingDir = dirForSpinIndex(history.length); // direction of next spin index
+  const upcomingDir = dirForSpinIndex(history.length);
   const usable = dists.filter(x=>x.dir===upcomingDir);
 
-  // Need at least N directional distances for upcoming direction
   if(usable.length < N) return null;
 
-  // Fit on last N directional distances
   const fitVals = usable.slice(-N).map(x=>x.dist);
   const model = fitAR3(fitVals);
   if(!model) return null;
 
-  // Evaluate candidate shifts over recent evaluation records
-  // We'll evaluate on the subset where we can form a prediction and have a next result.
-  // Use last (N-1) records (small, but keeps it consistent).
-  const evalRecs = usable.slice(-(Math.max(5, Math.min(N-1, 10)))); // 5..10 eval points
+  const evalCount = Math.max(5, Math.min(N-1, 10));
+  const evalRecs = usable.slice(-evalCount);
 
   let best=null;
-
   for(const shift of shiftOptions){
     let bets=0,hits=0;
-
     for(const rec of evalRecs){
       const s = rec.spinIndex;
       if(s+1 >= history.length) continue;
-
-      // predict for spin s+1 using history up to s
       const h = history.slice(0, s+1);
       const pred = predictCentreFromModel(h, model, shift);
       if(pred==null) continue;
 
+      const half = +document.getElementById("half").value;
       const covered = neighbours(pred, half);
       const result = history[s+1];
 
       bets++;
       if(covered.includes(result)) hits++;
     }
-
     if(bets===0) continue;
     const hitRate = hits/bets;
-
     if(!best || hitRate > best.hitRate){
       best = {shift, model, hitRate, bets};
     }
   }
-
-  if(!best) return null;
   return best;
 }
 
 function predictCentreFromModel(history, model, shift){
-  // Need enough directional distances in upcoming direction to take last 3 Xs
   const dists = buildDistances(history);
   const upcomingDir = dirForSpinIndex(history.length);
   const usable = dists.filter(x=>x.dir===upcomingDir).map(x=>x.dist);
@@ -418,7 +411,7 @@ function predictCentreFromModel(history, model, shift){
 }
 
 /* =========================
-   LIVE STATE
+   LIVE
 ========================= */
 let spins = [];
 let lastPrediction = null;
@@ -429,6 +422,47 @@ function addSpin(){
   spinInput.value="";
   spins.push(v);
   refreshLive();
+  spinInput.focus();
+}
+
+function refreshLive(){
+  liveCountEl.textContent = `${spins.length} spins`;
+
+  nextCentreEl.textContent = "–";
+  nextMetaEl.textContent = "No prediction yet.";
+  clearWheel();
+
+  if(spins.length < 2){
+    statusEl.innerHTML = `<span class="pill neutral">WAIT</span> Add more spins.`;
+    return;
+  }
+
+  const chosen = chooseParamsForNext(spins);
+  if(!chosen){
+    const dists = buildDistances(spins);
+    const upcomingDir = dirForSpinIndex(spins.length);
+    const have = dists.filter(x=>x.dir===upcomingDir).length;
+    const need = +document.getElementById("windowN").value;
+    statusEl.innerHTML = `<span class="pill neutral">WAIT</span> Need ${need} ${upcomingDir} distances (have ${have}).`;
+    return;
+  }
+
+  const centre = predictCentreFromModel(spins, chosen.model, chosen.shift);
+  if(centre==null){
+    statusEl.innerHTML = `<span class="pill neutral">WAIT</span> Not enough structure yet to predict.`;
+    return;
+  }
+
+  const half = +document.getElementById("half").value;
+  const covered = neighbours(centre, half);
+
+  lastPrediction = {centre, covered, chosen};
+
+  nextCentreEl.textContent = String(centre);
+  nextMetaEl.textContent = `shift=${chosen.shift} • evalHit=${(chosen.hitRate*100).toFixed(1)}% (n=${chosen.bets})`;
+  highlightWheel(centre, covered);
+
+  statusEl.innerHTML = `<span class="pill good">BET</span> Cover ${covered.length} numbers.`;
 }
 
 function resetLive(){
@@ -450,50 +484,6 @@ function exportTxt(){
   setTimeout(()=>{document.body.removeChild(a);URL.revokeObjectURL(url);},0);
 }
 
-function refreshLive(){
-  liveCountEl.textContent = `${spins.length} spins`;
-  statusEl.textContent = "";
-
-  nextCentreEl.textContent = "–";
-  nextMetaEl.textContent = "No prediction yet.";
-  clearWheel();
-
-  if(spins.length < 2){
-    statusEl.innerHTML = `<span class="pill neutral">WAIT</span> Add more spins.`;
-    return;
-  }
-
-  const chosen = chooseParamsForNext(spins);
-  if(!chosen){
-    const dists = buildDistances(spins);
-    const upcomingDir = dirForSpinIndex(spins.length);
-    const have = dists.filter(x=>x.dir===upcomingDir).length;
-    const need = +document.getElementById("windowN").value;
-    statusEl.innerHTML = `<span class="pill neutral">WAIT</span> Need ${need} ${upcomingDir} directional distances (have ${have}).`;
-    return;
-  }
-
-  const centre = predictCentreFromModel(spins, chosen.model, chosen.shift);
-  if(centre==null){
-    statusEl.innerHTML = `<span class="pill neutral">WAIT</span> Not enough structure yet to predict.`;
-    return;
-  }
-
-  const half = +document.getElementById("half").value;
-  const covered = neighbours(centre, half);
-
-  lastPrediction = {centre, covered, chosen};
-
-  nextCentreEl.textContent = String(centre);
-  nextMetaEl.textContent = `shift=${chosen.shift} • evalHit=${(chosen.hitRate*100).toFixed(1)}% (n=${chosen.bets})`;
-  highlightWheel(centre, covered);
-
-  statusEl.innerHTML = `<span class="pill good">BET</span> Cover ${covered.length} numbers (centre + neighbours).`;
-}
-
-/* =========================
-   BULK IMPORT (PASTE)
-========================= */
 function parseSpinsText(text){
   const toks = text.split(/[\s,;]+/).filter(Boolean);
   const out=[];
@@ -503,7 +493,6 @@ function parseSpinsText(text){
   }
   return out;
 }
-
 function loadBulkToLive(){
   const txt = document.getElementById("bulkBox").value;
   const arr = parseSpinsText(txt);
@@ -512,7 +501,6 @@ function loadBulkToLive(){
   lastPrediction = null;
   refreshLive();
 }
-
 function appendBulkToLive(){
   const txt = document.getElementById("bulkBox").value;
   const arr = parseSpinsText(txt);
@@ -523,49 +511,14 @@ function appendBulkToLive(){
 }
 
 /* =========================
-   FILE IMPORT → LIVE
+   HISTORIC REPLAY HELPERS
 ========================= */
-async function importFileToLive(){
-  const fi = document.getElementById("fileInput");
-  const file = fi.files && fi.files[0];
-  if(!file){ alert("Choose a .txt or .csv file first."); return; }
-
-  const text = await file.text();
-  const arr = parseSpinsText(text);
-  if(arr.length<1){ alert("No valid spins found in file."); return; }
-
-  spins = arr;
-  lastPrediction = null;
-  refreshLive();
-}
-
-/* =========================
-   HISTORIC REPLAY
-   (replay using the same next-prediction logic)
-========================= */
-function runHistoricReplay(){
-  const simOut = document.getElementById("simOut");
-  const tbody = document.getElementById("simTbody");
-  const wrap = document.getElementById("simTableWrap");
-
-  wrap.style.display="none";
-  tbody.innerHTML="";
-
-  if(spins.length < 6){
-    simOut.innerHTML = `<span class="pill bad">NO DATA</span> Need more spins in Live first.`;
-    return;
-  }
-
+function replayStats(spinArr){
   const half = +document.getElementById("half").value;
+  let bets=0,hits=0,streak=0,worst=0;
 
-  let bets=0, hits=0;
-  let streak=0, worst=0;
-
-  // We simulate: at each step i we predict next using history[0..i]
-  // and score it against history[i+1]
-  for(let i=0;i<spins.length-1;i++){
-    const hist = spins.slice(0, i+1);
-
+  for(let i=0;i<spinArr.length-1;i++){
+    const hist = spinArr.slice(0, i+1);
     const chosen = chooseParamsForNext(hist);
     if(!chosen) continue;
 
@@ -573,14 +526,12 @@ function runHistoricReplay(){
     if(centre==null) continue;
 
     const covered = neighbours(centre, half);
-    const result = spins[i+1];
+    const result = spinArr[i+1];
 
     bets++;
-    const hit = covered.includes(result);
-
-    if(hit){
+    if(covered.includes(result)){
       hits++;
-      streak = 0;
+      streak=0;
     }else{
       streak++;
       worst = Math.max(worst, streak);
@@ -588,21 +539,155 @@ function runHistoricReplay(){
   }
 
   const hitRate = bets ? (hits/bets)*100 : 0;
+  return {spins: spinArr.length, bets, hits, hitRate, worst};
+}
 
-  simOut.innerHTML =
-    `<span class="pill neutral">REPLAY</span> `+
-    `Bets=${bets}, Hits=${hits}, Hit%=${hitRate.toFixed(1)}%, Worst streak=${worst}`;
+/* =========================
+   EXCEL/CSV DAYS UPLOAD
+========================= */
+const daysFile = document.getElementById("daysFile");
+const daysStatus = document.getElementById("daysStatus");
+const daysResults = document.getElementById("daysResults");
+const daysTbody = document.getElementById("daysTbody");
+const totSpins = document.getElementById("totSpins");
+const totBets = document.getElementById("totBets");
+const totHit = document.getElementById("totHit");
+const totWorst = document.getElementById("totWorst");
 
-  tbody.innerHTML = `
-    <tr>
-      <td>${spins.length}</td>
-      <td>${bets}</td>
-      <td>${hits}</td>
-      <td>${bets ? hitRate.toFixed(1)+"%" : "–"}</td>
-      <td>${worst}</td>
-    </tr>
-  `;
-  wrap.style.display="block";
+let loadedDays = []; // {name, spins[]}
+
+function clearDays(){
+  loadedDays = [];
+  daysStatus.textContent = "";
+  daysResults.style.display = "none";
+  daysTbody.innerHTML = "";
+}
+
+async function loadDaysFile(){
+  const file = daysFile.files && daysFile.files[0];
+  if(!file){
+    alert("Choose an Excel (.xlsx) or CSV file first.");
+    return;
+  }
+
+  daysStatus.textContent = "Loading…";
+  daysResults.style.display = "none";
+  daysTbody.innerHTML = "";
+
+  try{
+    const name = file.name.toLowerCase();
+    if(name.endsWith(".csv")){
+      const text = await file.text();
+      const matrix = parseCSVToMatrix(text);
+      loadedDays = matrixToDays(matrix);
+    }else{
+      // XLSX/XLS
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data, {type:"array"});
+      const sheetName = wb.SheetNames[0];
+      const ws = wb.Sheets[sheetName];
+      const matrix = XLSX.utils.sheet_to_json(ws, {header:1, raw:true});
+      loadedDays = matrixToDays(matrix);
+    }
+
+    loadedDays = loadedDays.filter(d=>d.spins.length>=2);
+
+    if(loadedDays.length === 0){
+      throw new Error("No valid day columns found. Make sure row 1 has day names, numbers below (0–36).");
+    }
+
+    renderDayResults();
+
+    daysStatus.innerHTML =
+      `<span class="pill good">LOADED</span> Loaded ${loadedDays.length} day columns. Click “Load to Live” for any day.`;
+
+  }catch(e){
+    console.error(e);
+    daysStatus.innerHTML = `<span class="pill bad">ERROR</span> ${e.message || String(e)}`;
+  }
+}
+
+function parseCSVToMatrix(text){
+  // simple CSV split (works fine for your numeric layout)
+  const rows = text.split(/\r?\n/).filter(r=>r.trim()!=="");
+  return rows.map(r => r.split(","));
+}
+
+function matrixToDays(matrix){
+  // matrix[0] = headers (days)
+  if(!matrix || matrix.length < 2) return [];
+  const headers = (matrix[0] || []).map(h => String(h ?? "").trim());
+  const cols = Array.from({length: headers.length}, ()=>[]);
+
+  for(let r=1;r<matrix.length;r++){
+    const row = matrix[r] || [];
+    for(let c=0;c<headers.length;c++){
+      const cell = row[c];
+      if(cell === null || cell === undefined || String(cell).trim()==="") continue;
+      const v = parseInt(String(cell).trim(), 10);
+      if(Number.isFinite(v) && v>=0 && v<=36){
+        cols[c].push(v);
+      }
+    }
+  }
+
+  const days = [];
+  for(let c=0;c<headers.length;c++){
+    const dayName = headers[c] ? headers[c] : `Day ${c+1}`;
+    days.push({name: dayName, spins: cols[c]});
+  }
+  return days;
+}
+
+function renderDayResults(){
+  daysTbody.innerHTML = "";
+
+  let totalSp=0, totalB=0, totalH=0;
+  let overallWorst = 0;
+
+  for(let i=0;i<loadedDays.length;i++){
+    const d = loadedDays[i];
+    const res = replayStats(d.spins);
+
+    totalSp += res.spins;
+    totalB += res.bets;
+    totalH += res.hits;
+    overallWorst = Math.max(overallWorst, res.worst);
+
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${escapeHtml(d.name)}</td>
+      <td>${res.spins}</td>
+      <td>${res.bets}</td>
+      <td>${res.bets ? res.hitRate.toFixed(1)+"%" : "–"}</td>
+      <td>${res.worst}</td>
+      <td class="actions">
+        <button class="btn2" type="button" onclick="loadDayToLive(${i})">Load to Live</button>
+      </td>
+    `;
+    daysTbody.appendChild(tr);
+  }
+
+  totSpins.textContent = totalSp;
+  totBets.textContent = totalB;
+  totHit.textContent = totalB ? ((totalH/totalB)*100).toFixed(1)+"%" : "–";
+  totWorst.textContent = overallWorst;
+
+  daysResults.style.display = "block";
+}
+
+function loadDayToLive(idx){
+  const d = loadedDays[idx];
+  if(!d) return;
+  spins = d.spins.slice();
+  lastPrediction = null;
+  refreshLive();
+  window.scrollTo({top:0, behavior:"smooth"});
+}
+
+/* tiny helper */
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 
 /* init */
